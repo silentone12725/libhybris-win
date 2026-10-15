@@ -2701,6 +2701,16 @@ bool VersionTracker::init_verneed(const soinfo* si_from) {
     });
 
     if (target_si == nullptr) {
+      // On Android, some system libs (libdl.so) are implicitly loaded and may not
+      // appear in DT_NEEDED but still appear in verneed. Fall back to global soinfo list.
+      for (soinfo* candidate = solist_get_head(); candidate != nullptr; candidate = candidate->next) {
+        if (candidate->get_soname() != nullptr && strcmp(candidate->get_soname(), target_soname) == 0) {
+          target_si = candidate;
+          break;
+        }
+      }
+    }
+    if (target_si == nullptr) {
       DL_ERR("cannot find \"%s\" from verneed[%zd] in DT_NEEDED list for \"%s\"",
           target_soname, i, si_from->get_realpath());
       return false;

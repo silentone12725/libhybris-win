@@ -34,17 +34,23 @@
 #include <sys/cdefs.h>
 #include <sys/types.h>
 
+#if defined(_WIN32)
+#include "windows_elf_defs.h"
+#else
 #include <elf.h>
+#endif
 
 __BEGIN_DECLS
 
 typedef Elf32_Word Elf32_Relr;
 typedef Elf64_Xword Elf64_Relr;
 
-#if defined(__LP64__)
+#ifndef ElfW
+#if defined(__LP64__) || (defined(_WIN32) && defined(_WIN64))
 #define ElfW(type) Elf64_ ## type
 #else
 #define ElfW(type) Elf32_ ## type
+#endif
 #endif
 
 struct dl_phdr_info {

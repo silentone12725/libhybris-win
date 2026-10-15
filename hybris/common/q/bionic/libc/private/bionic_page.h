@@ -18,7 +18,12 @@
 #define _BIONIC_PAGE_H_
 
 // Get PAGE_SIZE and PAGE_MASK.
+#if defined(_WIN32)
+#define PAGE_SIZE 4096
+#define PAGE_MASK (~(PAGE_SIZE - 1))
+#else
 #include <sys/user.h>
+#endif
 
 // Returns the address of the page containing address 'x'.
 #define PAGE_START(x) ((x) & PAGE_MASK)

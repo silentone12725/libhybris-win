@@ -30,7 +30,11 @@
 
 #include <dlfcn.h>
 #include <android/dlext.h>
+#if defined(_WIN32)
+#include "windows_elf_defs.h"
+#else
 #include <elf.h>
+#endif
 
 typedef Elf32_Word Elf32_Relr;
 typedef Elf64_Xword Elf64_Relr;
@@ -50,10 +54,12 @@ typedef Elf64_Xword Elf64_Relr;
 #include <string>
 #include <vector>
 
-#if defined(__LP64__)
+#ifndef ELFW
+#if defined(__LP64__) || (defined(_WIN32) && defined(_WIN64))
 #define ELFW(what) ELF64_ ## what
 #else
 #define ELFW(what) ELF32_ ## what
+#endif
 #endif
 
 // mips64 interprets Elf64_Rel structures' r_info field differently.

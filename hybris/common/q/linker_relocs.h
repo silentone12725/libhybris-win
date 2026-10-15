@@ -28,7 +28,11 @@
 
 #pragma once
 
+#if defined(_WIN32)
+#include "windows_elf_defs.h"
+#else
 #include <elf.h>
+#endif
 
 #define R_GENERIC_NONE 0 // R_*_NONE is always 0
 

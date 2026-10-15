@@ -41,8 +41,14 @@
 class ElfReader {
  public:
   ElfReader();
+#if defined(_WIN32)
+  ~ElfReader();
+  bool Read(const char* name, const win_elf_file* file, int64_t file_offset, int64_t file_size);
+  bool Read(const char* name, int fd, int64_t file_offset, int64_t file_size);
+#else
 
   bool Read(const char* name, int fd, off64_t file_offset, off64_t file_size);
+#endif
   bool Load(address_space_params* address_space);
 
   const char* name() const { return name_.c_str(); }
@@ -71,9 +77,17 @@ class ElfReader {
   bool did_read_;
   bool did_load_;
   std::string name_;
+#if defined(_WIN32)
+  const win_elf_file* file_;
+  win_elf_file file_storage_;
+  int64_t file_offset_;
+  int64_t file_size_;
+  win_elf_image image_;
+#else
   int fd_;
   off64_t file_offset_;
   off64_t file_size_;
+#endif
 
   ElfW(Ehdr) header_;
   size_t phdr_num_;

@@ -32,11 +32,15 @@
 
 #include <errno.h>
 #include <string.h>
+#if !defined(_WIN32)
 #include <sys/mman.h>
 //#include <sys/prctl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#else
+#include <io.h>
+#endif
 
 #include "linker.h"
 #include "linker_dlwarning.h"
@@ -58,7 +62,7 @@ static int GetTargetElfMachine() {
   return EM_386;
 #elif defined(__mips__)
   return EM_MIPS;
-#elif defined(__x86_64__)
+#elif defined(__x86_64__) || defined(_M_X64)
   return EM_X86_64;
 #endif
 }
@@ -139,18 +143,58 @@ static int GetTargetElfMachine() {
 
  **/
 
+#if !defined(_WIN32)
 #define MAYBE_MAP_FLAG(x, from, to)  (((x) & (from)) ? (to) : 0)
 #define PFLAGS_TO_PROT(x)            (MAYBE_MAP_FLAG((x), PF_X, PROT_EXEC) | \
                                       MAYBE_MAP_FLAG((x), PF_R, PROT_READ) | \
                                       MAYBE_MAP_FLAG((x), PF_W, PROT_WRITE))
+#endif
 
 ElfReader::ElfReader()
-    : did_read_(false), did_load_(false), fd_(-1), file_offset_(0), file_size_(0), phdr_num_(0),
+    : did_read_(false), did_load_(false),
+#if defined(_WIN32)
+      file_(nullptr), file_storage_{}, file_offset_(0), file_size_(0), image_{},
+#else
+      fd_(-1), file_offset_(0), file_size_(0),
+#endif
+      phdr_num_(0),
       phdr_table_(nullptr), shdr_table_(nullptr), shdr_num_(0), dynamic_(nullptr), strtab_(nullptr),
       strtab_size_(0), load_start_(nullptr), load_size_(0), load_bias_(0), loaded_phdr_(nullptr),
       mapped_by_caller_(false) {
 }
 
+#if defined(_WIN32)
+ElfReader::~ElfReader() {
+  if (!did_load_ && !mapped_by_caller_) win_elf_image_release(&image_);
+}
+
+bool ElfReader::Read(const char* name, const win_elf_file* file, int64_t file_offset,
+                     int64_t file_size) {
+  if (did_read_) return true;
+  if (file == nullptr || file->handle == INVALID_HANDLE_VALUE || file_offset < 0 ||
+      file_size < 0 || static_cast<uint64_t>(file_size) > file->size) return false;
+  name_ = name;
+  file_ = file;
+  file_offset_ = file_offset;
+  file_size_ = file_size;
+  if (ReadElfHeader() && VerifyElfHeader() && ReadProgramHeaders() &&
+      ReadSectionHeaders() && ReadDynamicSection()) did_read_ = true;
+  return did_read_;
+}
+
+bool ElfReader::Read(const char* name, int fd, int64_t file_offset, int64_t file_size) {
+  intptr_t native_handle;
+  if (fd < 0 || file_offset < 0 || file_size < 0 ||
+      static_cast<uint64_t>(file_offset) > UINT64_MAX - static_cast<uint64_t>(file_size)) {
+    return false;
+  }
+  native_handle = _get_osfhandle(fd);
+  if (native_handle == -1) return false;
+  file_storage_.handle = reinterpret_cast<HANDLE>(native_handle);
+  file_storage_.size = static_cast<uint64_t>(file_offset) + static_cast<uint64_t>(file_size);
+  return Read(name, &file_storage_, file_offset, file_size);
+}
+#else
 bool ElfReader::Read(const char* name, int fd, off64_t file_offset, off64_t file_size) {
   if (did_read_) {
     return true;
@@ -170,6 +214,7 @@ bool ElfReader::Read(const char* name, int fd, off64_t file_offset, off64_t file
 
   return did_read_;
 }
+#endif
 
 bool ElfReader::Load(address_space_params* address_space) {
   CHECK(did_read_);
@@ -179,6 +224,13 @@ bool ElfReader::Load(address_space_params* address_space) {
   if (ReserveAddressSpace(address_space) && LoadSegments() && FindPhdr()) {
     did_load_ = true;
   }
+#if defined(_WIN32)
+  if (!did_load_ && !mapped_by_caller_) {
+    win_elf_image_release(&image_);
+    load_start_ = nullptr;
+    load_size_ = 0;
+  }
+#endif
 
   return did_load_;
 }
@@ -191,6 +243,14 @@ const char* ElfReader::get_string(ElfW(Word) index) const {
 }
 
 bool ElfReader::ReadElfHeader() {
+#if defined(_WIN32)
+  if (file_offset_ > file_size_ ||
+      static_cast<uint64_t>(file_size_ - file_offset_) < sizeof(header_) ||
+      !win_elf_file_read_at(file_, &header_, sizeof(header_), file_offset_)) {
+    DL_ERR("can't read ELF header from \"%s\"", name_.c_str());
+    return false;
+  }
+#else
   ssize_t rc = TEMP_FAILURE_RETRY(pread64(fd_, &header_, sizeof(header_), file_offset_));
   if (rc < 0) {
     DL_ERR("can't read file \"%s\": %s", name_.c_str(), strerror(errno));
@@ -202,6 +262,7 @@ bool ElfReader::ReadElfHeader() {
            static_cast<size_t>(rc));
     return false;
   }
+#endif
   return true;
 }
 
@@ -335,7 +396,13 @@ bool ElfReader::ReadProgramHeaders() {
     return false;
   }
 
-  if (!phdr_fragment_.Map(fd_, file_offset_, header_.e_phoff, size)) {
+  if (!phdr_fragment_.Map(
+#if defined(_WIN32)
+                          file_,
+#else
+                          fd_,
+#endif
+                          file_offset_, header_.e_phoff, size)) {
     DL_ERR("\"%s\" phdr mmap failed: %s", name_.c_str(), strerror(errno));
     return false;
   }
@@ -361,7 +428,13 @@ bool ElfReader::ReadSectionHeaders() {
     return false;
   }
 
-  if (!shdr_fragment_.Map(fd_, file_offset_, header_.e_shoff, size)) {
+  if (!shdr_fragment_.Map(
+#if defined(_WIN32)
+                          file_,
+#else
+                          fd_,
+#endif
+                          file_offset_, header_.e_shoff, size)) {
     DL_ERR("\"%s\" shdr mmap failed: %s", name_.c_str(), strerror(errno));
     return false;
   }
@@ -454,7 +527,13 @@ bool ElfReader::ReadDynamicSection() {
     return false;
   }
 
-  if (!dynamic_fragment_.Map(fd_, file_offset_, dynamic_shdr->sh_offset, dynamic_shdr->sh_size)) {
+  if (!dynamic_fragment_.Map(
+#if defined(_WIN32)
+                             file_,
+#else
+                             fd_,
+#endif
+                             file_offset_, dynamic_shdr->sh_offset, dynamic_shdr->sh_size)) {
     DL_ERR("\"%s\" dynamic section mmap failed: %s", name_.c_str(), strerror(errno));
     return false;
   }
@@ -467,7 +546,13 @@ bool ElfReader::ReadDynamicSection() {
     return false;
   }
 
-  if (!strtab_fragment_.Map(fd_, file_offset_, strtab_shdr->sh_offset, strtab_shdr->sh_size)) {
+  if (!strtab_fragment_.Map(
+#if defined(_WIN32)
+                            file_,
+#else
+                            fd_,
+#endif
+                            file_offset_, strtab_shdr->sh_offset, strtab_shdr->sh_size)) {
     DL_ERR("\"%s\" strtab section mmap failed: %s", name_.c_str(), strerror(errno));
     return false;
   }
@@ -528,6 +613,7 @@ size_t phdr_table_get_load_size(const ElfW(Phdr)* phdr_table, size_t phdr_count,
 
 // Reserve a virtual address range such that if it's limits were extended to the next 2**align
 // boundary, it would not overlap with any existing mappings.
+#if !defined(_WIN32)
 static void* ReserveAligned(size_t size, size_t align) {
   int mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS;
   if (align == PAGE_SIZE) {
@@ -558,6 +644,7 @@ static void* ReserveAligned(size_t size, size_t align) {
   munmap(start + size, mmap_ptr + mmap_size - (start + size));
   return start;
 }
+#endif
 
 // Reserve a virtual address range big enough to hold all loadable
 // segments of a program header table. This is done by creating a
@@ -579,7 +666,12 @@ bool ElfReader::ReserveAddressSpace(address_space_params* address_space) {
              load_size_ - address_space->reserved_size, load_size_, name_.c_str());
       return false;
     }
+#if defined(_WIN32)
+    start = win_elf_image_reserve_aligned(&image_, load_size_, kLibraryAlignment)
+                ? image_.base : nullptr;
+#else
     start = ReserveAligned(load_size_, kLibraryAlignment);
+#endif
     if (start == nullptr) {
       DL_ERR("couldn't reserve %zd bytes of address space for \"%s\"", load_size_, name_.c_str());
       return false;
@@ -587,6 +679,16 @@ bool ElfReader::ReserveAddressSpace(address_space_params* address_space) {
   } else {
     start = address_space->start_addr;
     mapped_by_caller_ = true;
+#if defined(_WIN32)
+    if (start == nullptr || reinterpret_cast<uintptr_t>(start) % PAGE_SIZE != 0) {
+      DL_ERR("invalid caller reservation for \"%s\"", name_.c_str());
+      return false;
+    }
+    image_.base = static_cast<unsigned char*>(start);
+    image_.size = load_size_;
+    image_.allocation_base = image_.base;
+    image_.allocation_size = image_.size;
+#endif
 
     // Update the reserved address space to subtract the space used by this library.
     address_space->start_addr = reinterpret_cast<uint8_t*>(address_space->start_addr) + load_size_;
@@ -599,6 +701,67 @@ bool ElfReader::ReserveAddressSpace(address_space_params* address_space) {
 }
 
 bool ElfReader::LoadSegments() {
+#if defined(_WIN32)
+  for (size_t i = 0; i < phdr_num_; ++i) {
+    const ElfW(Phdr)* phdr = &phdr_table_[i];
+    if (phdr->p_type != PT_LOAD) continue;
+    if (phdr->p_filesz > phdr->p_memsz || phdr->p_offset > UINT64_MAX - phdr->p_filesz ||
+        phdr->p_offset + phdr->p_filesz > static_cast<uint64_t>(file_size_) ||
+        phdr->p_vaddr < reinterpret_cast<uintptr_t>(load_start_) - load_bias_ ||
+        phdr->p_vaddr - (reinterpret_cast<uintptr_t>(load_start_) - load_bias_) > load_size_ ||
+        phdr->p_memsz > load_size_ - (phdr->p_vaddr -
+                         (reinterpret_cast<uintptr_t>(load_start_) - load_bias_)) ||
+        (phdr->p_vaddr & (PAGE_SIZE - 1)) != (phdr->p_offset & (PAGE_SIZE - 1)) ||
+        static_cast<uint64_t>(file_offset_) > UINT64_MAX - phdr->p_offset ||
+        phdr->p_filesz > SIZE_MAX) {
+      DL_ERR("invalid ELF file \"%s\" load segment[%zu]", name_.c_str(), i);
+      return false;
+    }
+  }
+  for (size_t i = 0; i < phdr_num_; ++i) {
+    const ElfW(Phdr)* phdr = &phdr_table_[i];
+    if (phdr->p_type != PT_LOAD) continue;
+    size_t offset = static_cast<size_t>(phdr->p_vaddr + load_bias_ -
+                                        reinterpret_cast<uintptr_t>(load_start_));
+    size_t commit_begin = static_cast<size_t>(PAGE_START(phdr->p_vaddr) -
+                                              PAGE_START(reinterpret_cast<uintptr_t>(load_start_) - load_bias_));
+    size_t commit_end = static_cast<size_t>(PAGE_END(phdr->p_vaddr + phdr->p_memsz) -
+                                            PAGE_START(reinterpret_cast<uintptr_t>(load_start_) - load_bias_));
+    if (!win_elf_image_commit(&image_, commit_begin, commit_end - commit_begin)) {
+      DL_ERR("couldn't commit \"%s\" segment %zu", name_.c_str(), i);
+      return false;
+    }
+    if (phdr->p_filesz != 0 &&
+        !win_elf_file_read_at(file_, image_.base + offset,
+                              static_cast<size_t>(phdr->p_filesz),
+                              static_cast<uint64_t>(file_offset_) + phdr->p_offset)) {
+      DL_ERR("couldn't read \"%s\" segment %zu", name_.c_str(), i);
+      return false;
+    }
+    size_t file_end = offset + static_cast<size_t>(phdr->p_filesz);
+    size_t mem_end = offset + static_cast<size_t>(phdr->p_memsz);
+    if ((phdr->p_flags & PF_W) != 0 &&
+        (file_end & (PAGE_SIZE - 1)) != 0) {
+      memset(image_.base + file_end, 0, PAGE_SIZE - (file_end & (PAGE_SIZE - 1)));
+    }
+    size_t zero_begin = (file_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    if (zero_begin < mem_end) memset(image_.base + zero_begin, 0, mem_end - zero_begin);
+  }
+  // Protect in phdr order: the latter segment owns any shared page.
+  for (size_t i = 0; i < phdr_num_; ++i) {
+    const ElfW(Phdr)* phdr = &phdr_table_[i];
+    if (phdr->p_type != PT_LOAD || phdr->p_memsz == 0) continue;
+    size_t begin = static_cast<size_t>(PAGE_START(phdr->p_vaddr) -
+                                       PAGE_START(reinterpret_cast<uintptr_t>(load_start_) - load_bias_));
+    size_t end = static_cast<size_t>(PAGE_END(phdr->p_vaddr + phdr->p_memsz) -
+                                     PAGE_START(reinterpret_cast<uintptr_t>(load_start_) - load_bias_));
+    if (!win_elf_image_protect(&image_, begin, end - begin, phdr->p_flags | PF_R)) {
+      DL_ERR("couldn't protect \"%s\" segment %zu", name_.c_str(), i);
+      return false;
+    }
+  }
+  return true;
+#else
   for (size_t i = 0; i < phdr_num_; ++i) {
     const ElfW(Phdr)* phdr = &phdr_table_[i];
 
@@ -699,6 +862,7 @@ bool ElfReader::LoadSegments() {
     }
   }
   return true;
+#endif
 }
 
 /* Used internally. Used to set the protection bits of all loaded segments
@@ -707,6 +871,21 @@ bool ElfReader::LoadSegments() {
  */
 static int _phdr_table_set_load_prot(const ElfW(Phdr)* phdr_table, size_t phdr_count,
                                      ElfW(Addr) load_bias, int extra_prot_flags) {
+#if defined(_WIN32)
+  for (size_t i = 0; i < phdr_count; ++i) {
+    const ElfW(Phdr)* phdr = &phdr_table[i];
+    if (phdr->p_type != PT_LOAD || (phdr->p_flags & PF_W) != 0) continue;
+    uintptr_t start = static_cast<uintptr_t>(PAGE_START(phdr->p_vaddr) + load_bias);
+    uintptr_t end = static_cast<uintptr_t>(PAGE_END(phdr->p_vaddr + phdr->p_memsz) + load_bias);
+    uint32_t flags = phdr->p_flags;
+    if ((extra_prot_flags & 2) != 0) flags = (flags & ~PF_X) | PF_W;
+    DWORD old_protection;
+    DWORD protection = win_elf_protection_for_flags(flags | PF_R);
+    if (!VirtualProtect(reinterpret_cast<void*>(start), end - start, protection,
+                        &old_protection)) return -1;
+  }
+  return 0;
+#else
   const ElfW(Phdr)* phdr = phdr_table;
   const ElfW(Phdr)* phdr_limit = phdr + phdr_count;
 
@@ -739,6 +918,7 @@ static int _phdr_table_set_load_prot(const ElfW(Phdr)* phdr_table, size_t phdr_c
     }
   }
   return 0;
+#endif
 }
 
 /* Restore the original protection modes for all loadable segments.
@@ -783,6 +963,19 @@ int phdr_table_unprotect_segments(const ElfW(Phdr)* phdr_table,
  */
 static int _phdr_table_set_gnu_relro_prot(const ElfW(Phdr)* phdr_table, size_t phdr_count,
                                           ElfW(Addr) load_bias, int prot_flags) {
+#if defined(_WIN32)
+  (void)prot_flags;
+  for (size_t i = 0; i < phdr_count; ++i) {
+    const ElfW(Phdr)* phdr = &phdr_table[i];
+    if (phdr->p_type != PT_GNU_RELRO) continue;
+    uintptr_t start = static_cast<uintptr_t>(PAGE_START(phdr->p_vaddr) + load_bias);
+    uintptr_t end = static_cast<uintptr_t>(PAGE_END(phdr->p_vaddr + phdr->p_memsz) + load_bias);
+    DWORD old_protection;
+    if (!VirtualProtect(reinterpret_cast<void*>(start), end - start, PAGE_READONLY,
+                        &old_protection)) return -1;
+  }
+  return 0;
+#else
   const ElfW(Phdr)* phdr = phdr_table;
   const ElfW(Phdr)* phdr_limit = phdr + phdr_count;
 
@@ -818,6 +1011,7 @@ static int _phdr_table_set_gnu_relro_prot(const ElfW(Phdr)* phdr_table, size_t p
     }
   }
   return 0;
+#endif
 }
 
 /* Apply GNU relro protection if specified by the program header. This will
@@ -857,8 +1051,16 @@ int phdr_table_protect_gnu_relro(const ElfW(Phdr)* phdr_table,
 int phdr_table_serialize_gnu_relro(const ElfW(Phdr)* phdr_table,
                                    size_t phdr_count,
                                    ElfW(Addr) load_bias,
-                                   int fd,
-                                   size_t* file_offset) {
+                                    int fd,
+                                    size_t* file_offset) {
+#if defined(_WIN32)
+  (void)phdr_table;
+  (void)phdr_count;
+  (void)load_bias;
+  (void)fd;
+  (void)file_offset;
+  return -1;
+#else
   const ElfW(Phdr)* phdr = phdr_table;
   const ElfW(Phdr)* phdr_limit = phdr + phdr_count;
 
@@ -883,6 +1085,7 @@ int phdr_table_serialize_gnu_relro(const ElfW(Phdr)* phdr_table,
     *file_offset += size;
   }
   return 0;
+#endif
 }
 
 /* Where possible, replace the GNU relro segments with mappings of the given
@@ -905,8 +1108,16 @@ int phdr_table_serialize_gnu_relro(const ElfW(Phdr)* phdr_table,
 int phdr_table_map_gnu_relro(const ElfW(Phdr)* phdr_table,
                              size_t phdr_count,
                              ElfW(Addr) load_bias,
-                             int fd,
-                             size_t* file_offset) {
+                              int fd,
+                              size_t* file_offset) {
+#if defined(_WIN32)
+  (void)phdr_table;
+  (void)phdr_count;
+  (void)load_bias;
+  (void)fd;
+  (void)file_offset;
+  return -1;
+#else
   // Map the file at a temporary location so we can compare its contents.
   struct stat file_stat;
   if (TEMP_FAILURE_RETRY(fstat(fd, &file_stat)) != 0) {
@@ -977,6 +1188,7 @@ int phdr_table_map_gnu_relro(const ElfW(Phdr)* phdr_table,
   }
   munmap(temp_mapping, file_size);
   return 0;
+#endif
 }
 
 

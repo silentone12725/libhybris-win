@@ -28,16 +28,23 @@
 
 #pragma once
 
+#if defined(_WIN32)
+#include "windows_elf_host.h"
+using mapped_file_handle_t = const win_elf_file*;
+using mapped_file_offset_t = int64_t;
+#else
 #include <unistd.h>
-
-#include <android-base/macros.h>
+using mapped_file_handle_t = int;
+using mapped_file_offset_t = off64_t;
+#endif
 
 class MappedFileFragment {
  public:
   MappedFileFragment();
   ~MappedFileFragment();
 
-  bool Map(int fd, off64_t base_offset, size_t elf_offset, size_t size);
+  bool Map(mapped_file_handle_t file, mapped_file_offset_t base_offset,
+           size_t elf_offset, size_t size);
 
   void* data() const { return data_; }
   size_t size() const { return size_; }
@@ -47,5 +54,6 @@ class MappedFileFragment {
   void* data_;
   size_t size_;
 
-  DISALLOW_COPY_AND_ASSIGN(MappedFileFragment);
+  MappedFileFragment(const MappedFileFragment&) = delete;
+  MappedFileFragment& operator=(const MappedFileFragment&) = delete;
 };
