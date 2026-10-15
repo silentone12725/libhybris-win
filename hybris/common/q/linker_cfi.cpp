@@ -73,9 +73,17 @@ class ShadowWrite {
   ~ShadowWrite() {
     size_t size = aligned_end - aligned_start;
     mprotect(tmp_start, size, PROT_READ);
+#if defined(_WIN32)
+    DWORD old_protection;
+    CHECK(VirtualProtect(aligned_start, size, PAGE_READWRITE, &old_protection));
+    memcpy(aligned_start, tmp_start, size);
+    CHECK(VirtualProtect(aligned_start, size, PAGE_READONLY, &old_protection));
+    CHECK(munmap(tmp_start, size) == 0);
+#else
     void* res = mremap(tmp_start, size, size, MREMAP_MAYMOVE | MREMAP_FIXED,
                        reinterpret_cast<void*>(aligned_start));
     CHECK(res != MAP_FAILED);
+#endif
   }
 };
 

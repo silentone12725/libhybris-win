@@ -27,6 +27,9 @@
  */
 
 #include "linker_dlwarning.h"
+#if defined(_WIN32)
+#include "windows_posix_compat.h"
+#endif
 
 #include <strings.h>
 

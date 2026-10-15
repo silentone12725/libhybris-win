@@ -29,6 +29,9 @@
 #include "hybris_compat.h"
 
 #include "linker_main.h"
+#if defined(_WIN32)
+#include "windows_posix_compat.h"
+#endif
 
 #include <link.h>
 #include <sys/auxv.h>

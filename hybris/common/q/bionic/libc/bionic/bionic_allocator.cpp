@@ -28,6 +28,39 @@
 
 #include "private/bionic_allocator.h"
 
+#if defined(_WIN32)
+
+#include <malloc.h>
+
+void* BionicAllocator::alloc(size_t size) {
+  return _aligned_malloc(size == 0 ? 1 : size, 16);
+}
+
+void* BionicAllocator::memalign(size_t align, size_t size) {
+  if (align < sizeof(void*)) align = sizeof(void*);
+  return _aligned_malloc(size == 0 ? 1 : size, align);
+}
+
+void* BionicAllocator::realloc(void* ptr, size_t size) {
+  if (ptr == nullptr) return alloc(size);
+  if (size == 0) {
+    _aligned_free(ptr);
+    return nullptr;
+  }
+  return _aligned_realloc(ptr, size, 16);
+}
+
+void BionicAllocator::free(void* ptr) {
+  _aligned_free(ptr);
+}
+
+size_t BionicAllocator::get_chunk_size(void* ptr) {
+  (void)ptr;
+  return 0;
+}
+
+#else
+
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -424,3 +457,5 @@ BionicSmallObjectAllocator* BionicAllocator::get_small_object_allocator(uint32_t
   initialize_allocators();
   return &allocators_[type - kSmallObjectMinSizeLog2];
 }
+
+#endif

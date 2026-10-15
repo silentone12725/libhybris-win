@@ -17,9 +17,7 @@
 #ifndef BIONIC_PRCTL_H
 #define BIONIC_PRCTL_H
 
-#if !defined(_WIN32)
 #include <sys/prctl.h>
-#endif
 
 // This is only supported by Android kernels, so it's not in the uapi headers.
 #define PR_SET_VMA   0x53564d41

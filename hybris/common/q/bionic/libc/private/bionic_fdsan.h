@@ -34,9 +34,11 @@
 #include <stdatomic.h>
 #include <string.h>
 #include <sys/cdefs.h>
+#if !defined(_WIN32)
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/user.h>
+#endif
 
 struct FdEntry {
   _Atomic(uint64_t) close_tag = {0};

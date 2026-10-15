@@ -27,6 +27,9 @@
  */
 
 #include "linker_logger.h"
+#if defined(_WIN32)
+#include "windows_posix_compat.h"
+#endif
 
 #include <string.h>
 #include <sys/prctl.h>

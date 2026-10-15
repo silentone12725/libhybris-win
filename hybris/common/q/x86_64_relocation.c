@@ -2,19 +2,19 @@
 
 #include <limits.h>
 
-/* ELF x86-64 relocation numbers, kept local so a Windows build needs no elf.h. */
-enum {
-    Q_R_X86_64_64 = 1,
-    Q_R_X86_64_PC32 = 2,
-    Q_R_X86_64_GLOB_DAT = 6,
-    Q_R_X86_64_JUMP_SLOT = 7,
-    Q_R_X86_64_RELATIVE = 8,
-    Q_R_X86_64_32 = 10,
-    Q_R_X86_64_32S = 11,
-    Q_R_X86_64_DTPMOD64 = 16,
-    Q_R_X86_64_DTPOFF64 = 17,
-    Q_R_X86_64_TPOFF64 = 18
-};
+static uint64_t addend_modulo(uint64_t value, int64_t addend) {
+    if (addend >= 0) {
+        return value + (uint64_t)addend;
+    }
+    return value - ((uint64_t)(-(addend + 1)) + 1);
+}
+
+static int fits_signed(uint64_t value, unsigned int bits) {
+    uint64_t maximum = (UINT64_C(1) << (bits - 1)) - 1;
+    uint64_t minimum = UINT64_MAX - maximum;
+
+    return value <= maximum || value >= minimum;
+}
 
 q_x86_64_reloc_result q_x86_64_apply_relocation(
         unsigned char *image, size_t image_size, uint64_t image_vaddr,
@@ -28,12 +28,26 @@ q_x86_64_reloc_result q_x86_64_apply_relocation(
     if (image == NULL || rel == NULL) return Q_RELOC_OUT_OF_BOUNDS;
 
     switch (rel->type) {
+        case Q_R_X86_64_NONE:
+            return Q_RELOC_OK;
+        case Q_R_X86_64_8:
+        case Q_R_X86_64_PC8:
+            width = 1;
+            break;
+        case Q_R_X86_64_16:
+        case Q_R_X86_64_PC16:
+            width = 2;
+            break;
         case Q_R_X86_64_PC32:
+        case Q_R_X86_64_PLT32:
         case Q_R_X86_64_32:
         case Q_R_X86_64_32S:
+        case Q_R_X86_64_DTPOFF32:
+        case Q_R_X86_64_TPOFF32:
             width = 4;
             break;
         case Q_R_X86_64_64:
+        case Q_R_X86_64_PC64:
         case Q_R_X86_64_GLOB_DAT:
         case Q_R_X86_64_JUMP_SLOT:
         case Q_R_X86_64_RELATIVE:
@@ -54,7 +68,8 @@ q_x86_64_reloc_result q_x86_64_apply_relocation(
     place = (uint64_t)(uintptr_t)target;
 
     if (rel->type == Q_R_X86_64_RELATIVE) {
-        value = (uint64_t)(uintptr_t)image - image_vaddr + (uint64_t)rel->addend;
+        value = addend_modulo((uint64_t)(uintptr_t)image - image_vaddr,
+                              rel->addend);
     } else {
         if (symbol == NULL) return Q_RELOC_NO_SYMBOL;
         switch (rel->type) {
@@ -62,28 +77,42 @@ q_x86_64_reloc_result q_x86_64_apply_relocation(
                 value = symbol->tls_module_id;
                 break;
             case Q_R_X86_64_DTPOFF64:
-                value = symbol->value + (uint64_t)rel->addend;
+            case Q_R_X86_64_DTPOFF32:
+                value = addend_modulo(symbol->value, rel->addend);
                 break;
             case Q_R_X86_64_TPOFF64:
+            case Q_R_X86_64_TPOFF32:
                 if (!symbol->has_static_tls) return Q_RELOC_NO_STATIC_TLS;
-                value = symbol->static_tls_offset + symbol->value +
-                        (uint64_t)rel->addend;
+                value = addend_modulo(symbol->static_tls_offset + symbol->value,
+                                      rel->addend);
                 break;
             default:
-                value = symbol->value + (uint64_t)rel->addend;
+                value = addend_modulo(symbol->value, rel->addend);
                 break;
         }
     }
 
-    if (rel->type == Q_R_X86_64_PC32) {
+    if (rel->type == Q_R_X86_64_PC8 || rel->type == Q_R_X86_64_PC16 ||
+        rel->type == Q_R_X86_64_PC32 || rel->type == Q_R_X86_64_PLT32 ||
+        rel->type == Q_R_X86_64_PC64) {
         value -= place;
-        if (value > INT32_MAX && value < UINT64_MAX - (uint64_t)INT32_MAX) {
+        if ((rel->type == Q_R_X86_64_PC8 && !fits_signed(value, 8)) ||
+            (rel->type == Q_R_X86_64_PC16 && !fits_signed(value, 16)) ||
+            ((rel->type == Q_R_X86_64_PC32 ||
+              rel->type == Q_R_X86_64_PLT32) && !fits_signed(value, 32))) {
             return Q_RELOC_OUT_OF_RANGE;
         }
     } else if (rel->type == Q_R_X86_64_32 && value > UINT32_MAX) {
         return Q_RELOC_OUT_OF_RANGE;
-    } else if (rel->type == Q_R_X86_64_32S && value > INT32_MAX &&
-               value < UINT64_MAX - (uint64_t)INT32_MAX) {
+    } else if ((rel->type == Q_R_X86_64_32S ||
+                rel->type == Q_R_X86_64_TPOFF32) &&
+               !fits_signed(value, 32)) {
+        return Q_RELOC_OUT_OF_RANGE;
+    } else if (rel->type == Q_R_X86_64_16 && value > UINT16_MAX) {
+        return Q_RELOC_OUT_OF_RANGE;
+    } else if (rel->type == Q_R_X86_64_8 && value > UINT8_MAX) {
+        return Q_RELOC_OUT_OF_RANGE;
+    } else if (rel->type == Q_R_X86_64_DTPOFF32 && value > UINT32_MAX) {
         return Q_RELOC_OUT_OF_RANGE;
     }
 

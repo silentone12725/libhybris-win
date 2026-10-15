@@ -44,15 +44,19 @@ struct Allocation {
 
 void free_block(Allocation* allocation) {
   if (allocation->block == nullptr) return;
-  if (allocation->destructor != nullptr) {
-    allocation->destructor(allocation->block, allocation->size);
-  }
-#if defined(_WIN32)
-  _aligned_free(allocation->block);
-#else
-  free(allocation->block);
-#endif
+  void* block = allocation->block;
+  const size_t size = allocation->size;
+  const TlsDestructor destructor = allocation->destructor;
   allocation->block = nullptr;
+  allocation->size = 0;
+  allocation->destructor = nullptr;
+  allocation->generation = 0;
+  if (destructor != nullptr) destructor(block, size);
+#if defined(_WIN32)
+  _aligned_free(block);
+#else
+  free(block);
+#endif
 }
 
 void cleanup_context(TlsContext* context);
@@ -105,6 +109,7 @@ void CALLBACK fls_cleanup(void* value) {
   TlsContext* context = static_cast<TlsContext*>(value);
   TlsBackend* backend = context->backend;
   const bool auto_destroy = context->auto_destroy;
+  if (backend != nullptr) FlsSetValue(backend->fls_index, nullptr);
   cleanup_context(context);
   if (auto_destroy && backend != nullptr) {
     context->backend = nullptr;
@@ -118,6 +123,7 @@ void pthread_cleanup(void* value) {
   TlsContext* context = static_cast<TlsContext*>(value);
   TlsBackend* backend = context->backend;
   const bool auto_destroy = context->auto_destroy;
+  if (backend != nullptr) pthread_setspecific(backend->pthread_key, nullptr);
   cleanup_context(context);
   if (auto_destroy && backend != nullptr) {
     context->backend = nullptr;
@@ -128,13 +134,16 @@ void pthread_cleanup(void* value) {
 #endif
 
 void cleanup_context(TlsContext* context) {
-  std::lock_guard<std::mutex> lock(context->allocations_lock);
-  for (std::map<size_t, Allocation>::iterator it = context->allocations.begin();
-       it != context->allocations.end(); ++it) {
+  std::map<size_t, Allocation> allocations;
+  {
+    std::lock_guard<std::mutex> lock(context->allocations_lock);
+    allocations.swap(context->allocations);
+    context->attached = false;
+  }
+  for (std::map<size_t, Allocation>::iterator it = allocations.begin(); it != allocations.end();
+       ++it) {
     free_block(&it->second);
   }
-  context->allocations.clear();
-  context->attached = false;
 }
 
 bool valid_alignment(size_t alignment) {
@@ -306,36 +315,49 @@ void* get_addr(TlsBackend* backend, const TlsIndex& index) {
   TlsContext* context = context_current(backend);
   if (context == nullptr || index.module_id == 0) return nullptr;
 
-  Module module = {};
-  {
-    std::lock_guard<std::mutex> lock(backend->modules_lock);
-    std::map<size_t, Module>::const_iterator it = backend->modules.find(index.module_id);
-    if (it == backend->modules.end()) return nullptr;
-    module = it->second;
-  }
+  for (;;) {
+    Allocation stale = {};
+    {
+      // Keep the module lock while copying the initial image.  The image is
+      // owned by the loaded module and must remain valid until registration is
+      // removed.
+      std::lock_guard<std::mutex> modules_lock(backend->modules_lock);
+      std::map<size_t, Module>::const_iterator module_it =
+          backend->modules.find(index.module_id);
+      if (module_it == backend->modules.end()) return nullptr;
+      const Module& module = module_it->second;
+      if ((module.size != 0 && index.offset >= module.size) ||
+          (module.size == 0 && index.offset != 0)) {
+        return nullptr;
+      }
 
-  if (module.size != 0 && index.offset >= module.size) return nullptr;
-  if (module.size == 0 && index.offset != 0) return nullptr;
-
-  std::lock_guard<std::mutex> lock(context->allocations_lock);
-  std::map<size_t, Allocation>::iterator it = context->allocations.find(index.module_id);
-  if (it != context->allocations.end() && it->second.generation != module.generation) {
-    free_block(&it->second);
-    context->allocations.erase(it);
-    it = context->allocations.end();
-  }
-  if (it == context->allocations.end()) {
-    void* block = allocate_block(module.size, module.alignment);
-    if (block == nullptr) return nullptr;
-    if (module.init_size != 0) std::memcpy(block, module.init_ptr, module.init_size);
-    if (module.size > module.init_size) {
-      std::memset(static_cast<char*>(block) + module.init_size, 0, module.size - module.init_size);
+      std::lock_guard<std::mutex> allocations_lock(context->allocations_lock);
+      std::map<size_t, Allocation>::iterator it = context->allocations.find(index.module_id);
+      if (it != context->allocations.end() && it->second.generation == module.generation) {
+        return static_cast<char*>(it->second.block) + index.offset;
+      }
+      if (it != context->allocations.end()) {
+        stale = it->second;
+        context->allocations.erase(it);
+      } else {
+        void* block = allocate_block(module.size, module.alignment);
+        if (block == nullptr) return nullptr;
+        if (module.init_size != 0) std::memcpy(block, module.init_ptr, module.init_size);
+        if (module.size > module.init_size) {
+          std::memset(static_cast<char*>(block) + module.init_size, 0,
+                      module.size - module.init_size);
+        }
+        Allocation allocation = {block, module.size, module.destructor, module.generation};
+        it = context->allocations.insert(std::make_pair(index.module_id, allocation)).first;
+        return static_cast<char*>(it->second.block) + index.offset;
+      }
     }
-    Allocation allocation = {block, module.size, module.destructor, module.generation};
-    it = context->allocations.insert(std::make_pair(index.module_id, allocation)).first;
-  }
 
-  return static_cast<char*>(it->second.block) + index.offset;
+    // Destructors may call back into the backend, so never run one while
+    // holding either backend or context locks.  The allocation was removed
+    // above, making a callback unable to observe it as live.
+    free_block(&stale);
+  }
 }
 
 }  // namespace q_tls

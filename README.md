@@ -31,7 +31,8 @@ The project currently contains a staged portability implementation:
 - PT_LOAD reservation, commit, copying, BSS zero-fill, and page protection
 - Q `ElfReader` integration for native Windows PT_LOAD loading
 - Read-only ELF fragment loading
-- Standalone x86-64 relocation primitives, including core TLS relocation forms
+- Standalone x86-64 relocation primitives covering absolute, PC-relative, PLT,
+  and core TLS relocation forms with overflow and bounds checking
 - Windows FLS-backed PT_TLS backend with per-thread dynamic blocks and cleanup
 - Typed SysV/Microsoft x64 ABI thunk helpers for supported signatures
 - Windows `LoadTask`/filesystem search paths, including namespace paths,
@@ -39,6 +40,8 @@ The project currently contains a staged portability implementation:
 - Q TLS registration/unregistration hooks and typed constructor, destructor,
   and no-argument IFUNC lifecycle calls under `_WIN32`
 - Linux regression coverage for selected Q linker units
+- Reproducible x86-64 Q-linker/core build validation and portable TLS/
+  relocation regression tests
 
 The full Android dynamic-linker runtime is not complete. The full Q
 translation-unit boundary still depends on POSIX/Bionic memory, allocator,
@@ -91,11 +94,39 @@ runner is available:
 ./run-tests.sh
 ```
 
-The current Linux unit-test baseline is 19 tests across four test binaries.
+The current Linux GoogleTest baseline is 19 tests across four test binaries;
+the runner also exercises the standalone relocation and TLS backends.
 The Windows validation path uses the native MSYS2 UCRT64 toolchain (`gcc`,
 `g++`) and runs the resulting PE executables on Windows x64. Windows-specific
 source seams are selected with `_WIN32` and do not import the Android NDK
 sysroot wholesale.
+
+To build the x86-64 Q linker and core library from the current checkout without
+an external Android rootfs:
+
+```bash
+./build-and-test-x86_64.sh
+```
+
+To additionally run the Android `dlopen` smoke test, point the script at an
+x86-64 Android rootfs. A different library can be selected with
+`HYBRIS_SMOKE_LIBRARY`:
+
+```bash
+HYBRIS_ROOTFS=/path/to/android/system/lib64 ./build-and-test-x86_64.sh
+```
+
+On Windows with MSYS2/UCRT64, the native portability layer and ELF mapping
+tests can be run with:
+
+```bash
+HYBRIS_ROOTFS=/c/path/to/android/rootfs ./build-and-test-windows.sh
+```
+
+This validates the Windows file reader, PT_LOAD reservation/commit/protection,
+FLS-backed TLS backend, and x86-64 relocation primitives. The complete Q
+linker still requires additional Windows replacements for the remaining
+POSIX/Bionic synchronization and runtime seams.
 
 ## Scope and disclaimer
 

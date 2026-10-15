@@ -42,6 +42,10 @@
 #include "private/bionic_tls.h"
 #include "private/ScopedPthreadMutexLocker.h"
 
+#if defined(_WIN32) && !defined(PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP)
+#define PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP PTHREAD_RECURSIVE_MUTEX_INITIALIZER
+#endif
+
 #define __LINKER_PUBLIC__ __attribute__((visibility("default")))
 
 extern "C" {

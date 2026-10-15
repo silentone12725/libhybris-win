@@ -29,15 +29,21 @@
 #pragma once
 
 #include <locale.h>
+#if !defined(_WIN32)
 #include <mntent.h>
+#endif
 #include <stdio.h>
 #include <sys/cdefs.h>
+#if !defined(_WIN32)
 #include <sys/param.h>
+#endif
 
 #include "bionic_asm_tls.h"
 #include "bionic_macros.h"
 #include "__get_tls.h"
+#if !defined(_WIN32)
 #include "grp_pwd.h"
+#endif
 
 /** WARNING WARNING WARNING
  **
@@ -94,6 +100,10 @@ struct bionic_tcb {
 #define JEMALLOC_PTHREAD_KEY_RESERVED_COUNT 1
 #define BIONIC_PTHREAD_KEY_RESERVED_COUNT (LIBC_PTHREAD_KEY_RESERVED_COUNT + JEMALLOC_PTHREAD_KEY_RESERVED_COUNT)
 
+#if defined(_WIN32) && !defined(PTHREAD_KEYS_MAX)
+#define PTHREAD_KEYS_MAX 128
+#endif
+
 /*
  * Maximum number of pthread keys allocated.
  * This includes pthread keys used internally and externally.
@@ -111,6 +121,7 @@ class pthread_key_data_t {
 struct bionic_tls {
   pthread_key_data_t key_data[BIONIC_PTHREAD_KEY_COUNT];
 
+#if !defined(_WIN32)
   locale_t locale;
 
   char basename_buf[MAXPATHLEN];
@@ -131,6 +142,12 @@ struct bionic_tls {
   char fdtrack_disabled;
   char bionic_systrace_disabled;
   char padding[2];
+#else
+  // Windows stores Q TLS in the FLS-backed backend.  Keep only the bionic
+  // key slots in the compatibility object; POSIX mount, passwd, group, and
+  // path scratch state has no Windows implementation here.
+  char padding[4];
+#endif
 
   // Initialize the main thread's final object using its bootstrap object.
   void copy_from_bootstrap(const bionic_tls* boot __attribute__((unused))) {

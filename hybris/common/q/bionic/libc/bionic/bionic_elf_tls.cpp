@@ -300,6 +300,14 @@ static void update_tls_dtv(bionic_tcb* tcb) {
 }
 
 __attribute__((noinline)) static void* tls_get_addr_slow_path(const TlsIndex* ti) {
+#if defined(_WIN32)
+  // Windows uses the FLS-backed linker TLS implementation below.  Keep the
+  // POSIX DTV allocator out of the Windows translation unit: it relies on
+  // bionic's static-TLS layout and posix_memalign, neither of which is used
+  // on the Windows path.
+  (void)ti;
+  return nullptr;
+#else
   TlsModules& modules = __libc_shared_globals()->tls_modules;
   bionic_tcb* tcb = __get_bionic_tcb();
 
@@ -334,6 +342,7 @@ if (posix_memalign(&mod_ptr, segment.alignment, segment.size) != 0) {
   }
 
   return static_cast<char*>(mod_ptr) + ti->offset + TLS_DTV_OFFSET;
+#endif
 }
 
 // Returns the address of a thread's TLS memory given a module ID and an offset

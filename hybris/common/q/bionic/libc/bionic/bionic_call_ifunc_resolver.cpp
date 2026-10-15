@@ -28,8 +28,10 @@
 
 #include "private/bionic_call_ifunc_resolver.h"
 #include "hybris/common/abi_thunks.h"
+#if defined(__aarch64__) || defined(__arm__)
 #include <sys/auxv.h>
 #include <sys/ifunc.h>
+#endif
 
 ElfW(Addr) __bionic_call_ifunc_resolver(ElfW(Addr) resolver_addr) {
 #if defined(__aarch64__)

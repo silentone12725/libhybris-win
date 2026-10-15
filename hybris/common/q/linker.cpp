@@ -36,7 +36,9 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/param.h>
+#if !defined(_WIN32)
 #include <sys/vfs.h>
+#endif
 #include <unistd.h>
 
 #include <new>
@@ -72,6 +74,7 @@
 
 #if defined(_WIN32)
 #include "windows_elf_host.h"
+#include "windows_posix_compat.h"
 #endif
 
 #include "private/bionic_call_ifunc_resolver.h"
@@ -1281,7 +1284,7 @@ static bool open_library_on_paths_win(const char* name, off64_t* file_offset,
       continue;
     }
 
-    if (open_library_at_path_win(buf, file, file_offset, realpath)) {
+    if (open_library_at_path_win(buf, file_offset, file, realpath)) {
       return true;
     }
   }

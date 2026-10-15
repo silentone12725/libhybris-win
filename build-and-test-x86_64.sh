@@ -1,14 +1,32 @@
 #!/usr/bin/env bash
-# Build libhybris core loader (q linker + hooks) for x86-64 glibc,
-# then run a dlopen smoke-test against libstoreservicescore.so.
+# Build the libhybris core loader (Q linker + hooks) for x86-64 glibc.
+# If HYBRIS_ROOTFS is supplied, also run a dlopen smoke test against a real
+# Android x86-64 rootfs; otherwise stop after the reproducible build.
 set -euo pipefail
 
-REPO="/home/daksh/Git Projects/libhybris/hybris"
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO="$ROOT/hybris"
 Q="$REPO/common/q"
 COMMON="$REPO/common"
 INC="$REPO/include"
-AML_ROOTFS="/home/daksh/Git Projects/apple-music-linux/drm/rootfs/system/lib64"
+HYBRIS_ROOTFS="${HYBRIS_ROOTFS:-}"
 BUILD="/tmp/hybris-x86_64-build"
+
+# MSYS2 rewrites command-line arguments that look like POSIX paths before
+# passing them to native Windows programs.  The default ELF library path is a
+# C string passed through -D, not a filesystem argument; rewriting it turns
+# /odm/lib64 into a malformed preprocessor escape.  Exclude only this define
+# from MSYS2 argument conversion while leaving normal compiler paths intact.
+case "$(uname -s 2>/dev/null || true)" in
+    MINGW*|MSYS*|CYGWIN*)
+        if [[ -n "${MSYS2_ARG_CONV_EXCL:-}" ]]; then
+            export MSYS2_ARG_CONV_EXCL="${MSYS2_ARG_CONV_EXCL};-DDEFAULT_HYBRIS_LD_LIBRARY_PATH=*"
+        else
+            export MSYS2_ARG_CONV_EXCL="-DDEFAULT_HYBRIS_LD_LIBRARY_PATH=*"
+        fi
+        ;;
+esac
+
 rm -rf "$BUILD" && mkdir -p "$BUILD"
 
 BIONIC_LIBC="$Q/bionic/libc"
@@ -73,7 +91,6 @@ CFLAGS_COMMON=(
     -DTRACE_DEBUG=0
     -DNO_RUNTIME_PROPERTY_CACHE
     -DLINKER_PLUGIN_DIR='"/tmp/hybris-linker"'
-    "-DDEFAULT_HYBRIS_LD_LIBRARY_PATH=\"$LD_LIBRARY_PATH_DEFAULT\""
     # climits added per-file below for C++ only
     "-I$INC"
     "-I$COMMON"
@@ -85,19 +102,28 @@ CFLAGS_COMMON=(
     -DDYNAMIC_LINKER
 )
 
+# Native MinGW compilers already define _WIN32.  Keep the default path in the
+# Windows compatibility header instead of sending a POSIX path-list macro
+# through the Windows command-line parser.  The Linux build still receives
+# the historical configure-style define.
+TARGET_TRIPLE="$(g++ -dumpmachine 2>/dev/null || true)"
+if [[ "$TARGET_TRIPLE" != *mingw* && "$TARGET_TRIPLE" != *msys* ]]; then
+    CFLAGS_COMMON+=("-DDEFAULT_HYBRIS_LD_LIBRARY_PATH=\"$LD_LIBRARY_PATH_DEFAULT\"")
+fi
+
 compile_src() {
     local src="$1"
     # Use md5sum of the path to avoid spaces in filenames
     local hash
     hash=$(echo "$src" | md5sum | cut -c1-8)
     local obj="$BUILD/${hash}_$(basename "$src").o"
+    local -a cflags=("${CFLAGS_COMMON[@]}")
     echo "$obj"  # return obj path via stdout; errors go to stderr
     if [[ "$src" == *.c ]]; then
-        gcc -c "${CFLAGS_COMMON[@]}" -x c "$src" -o "$obj" 2>/dev/null || \
-        gcc -c "${CFLAGS_COMMON[@]}" -x c "$src" -o "$obj" 2>&1 | grep "error:" >&2 || true
+        cflags=("${cflags[@]/-std=c++17/-std=gnu11}")
+        gcc -c "${cflags[@]}" -x c "$src" -o "$obj"
     else
-        g++ -c "${CFLAGS_COMMON[@]}" -include climits "$src" -o "$obj" 2>/dev/null || \
-        g++ -c "${CFLAGS_COMMON[@]}" -include climits "$src" -o "$obj" 2>&1 | grep "error:" >&2 || true
+        g++ -c "${cflags[@]}" -include climits "$src" -o "$obj"
     fi
 }
 
@@ -124,16 +150,19 @@ Q_SRCS=(
     "$Q/linker_sdk_versions.cpp"
     "$Q/linker_soinfo.cpp"
     "$Q/linker_tls.cpp"
+    "$Q/windows_tls_backend.cpp"
     "$Q/linker_utils.cpp"
     "$Q/rt.cpp"
     "$Q/bionic/libc/bionic/bionic_elf_tls.cpp"
     "$Q/bionic/libc/bionic/bionic_allocator.cpp"
+    "$Q/x86_64_relocation.c"
+    "$COMMON/abi_thunks.c"
     "$COMMON/strlcpy.c"
     "$COMMON/strlcat.c"
 )
 Q_OBJS=()
 for src in "${Q_SRCS[@]}"; do
-    echo "  CC $(basename $src)"
+    echo "  CC $(basename "$src")"
     Q_OBJS+=( "$(compile_src "$src")" )
 done
 
@@ -141,7 +170,7 @@ echo ""
 echo "=== Linking q.so (linker plugin) ==="
 mkdir -p /tmp/hybris-linker
 g++ -shared -fPIC -o /tmp/hybris-linker/q.so "${Q_OBJS[@]}" \
-    -lpthread -ldl -lrt -lsupc++ 2>&1 | grep -v "warning:" || true
+    -lpthread -ldl -lrt -lsupc++
 echo "  -> /tmp/hybris-linker/q.so"
 ls -lh /tmp/hybris-linker/q.so
 
@@ -160,14 +189,14 @@ COMMON_SRCS=(
 )
 COMMON_OBJS=()
 for src in "${COMMON_SRCS[@]}"; do
-    echo "  CC $(basename $src)"
+    echo "  CC $(basename "$src")"
     COMMON_OBJS+=( "$(compile_src "$src")" )
 done
 
 echo ""
 echo "=== Linking libhybris-core.so ==="
 g++ -shared -fPIC -o "$BUILD/libhybris-core.so" "${COMMON_OBJS[@]}" \
-    -lpthread -ldl -lrt -lsupc++ 2>&1 | grep -v "warning:" || true
+    -lpthread -ldl -lrt -lsupc++
 
 echo "  -> $BUILD/libhybris-core.so"
 ls -lh "$BUILD/libhybris-core.so"
@@ -178,6 +207,7 @@ cat > "$BUILD/test_hybris_dlopen.cpp" << 'TESTEOF'
 #include <stdio.h>
 #include <stdlib.h>
 #include <dlfcn.h>
+#include <unistd.h>
 
 // hybris public API
 extern "C" {
@@ -194,19 +224,28 @@ int main() {
     printf("[test] Setting up hybris linker paths\n");
     fflush(stdout);
 
-    // Tell hybris where our Android libs are
-    setenv("HYBRIS_LINKER_DIR", "/tmp/hybris-linker", 1);
-    setenv("HYBRIS_LD_LIBRARY_PATH",
-        "/home/daksh/Git Projects/apple-music-linux/drm/rootfs/system/lib64", 1);
+    const char *rootfs = getenv("HYBRIS_ROOTFS");
+    if (rootfs == nullptr || rootfs[0] == '\0') {
+        printf("[SKIP] HYBRIS_ROOTFS is not set; build validation completed\n");
+        return 0;
+    }
+
+    const char *linker_dir = getenv("HYBRIS_LINKER_DIR");
+    if (linker_dir == nullptr || linker_dir[0] == '\0') linker_dir = "/tmp/hybris-linker";
+    setenv("HYBRIS_LINKER_DIR", linker_dir, 1);
+    setenv("HYBRIS_LD_LIBRARY_PATH", rootfs, 1);
 
     // Pre-load Android implicit system libs so they appear in the soinfo list.
     // On real Android, libdl.so is always implicitly available; on hybris it must be
     // explicitly loaded first so verneed checks can find it in the global solist.
-    const char *rootfs = "/home/daksh/Git Projects/apple-music-linux/drm/rootfs/system/lib64";
     const char *preload_libs[] = { "libdl.so", "libc.so", "libm.so", nullptr };
     for (int i = 0; preload_libs[i]; i++) {
         char path[512];
         snprintf(path, sizeof(path), "%s/%s", rootfs, preload_libs[i]);
+        if (access(path, R_OK) != 0) {
+            printf("[skip] preload %s is absent\n", preload_libs[i]);
+            continue;
+        }
         void *h = android_dlopen(path, RTLD_NOW | RTLD_GLOBAL);
         printf("[init] preload %s: %s\n", preload_libs[i], h ? "ok" : android_dlerror());
         fflush(stdout);
@@ -215,7 +254,14 @@ int main() {
     printf("[test] Attempting android_dlopen(libstoreservicescore.so)\n");
     fflush(stdout);
 
-    const char *lib = "/home/daksh/Git Projects/apple-music-linux/drm/rootfs/system/lib64/libstoreservicescore.so";
+    char lib_path[512];
+    const char *configured_lib = getenv("HYBRIS_SMOKE_LIBRARY");
+    if (configured_lib != nullptr && configured_lib[0] != '\0') {
+        snprintf(lib_path, sizeof(lib_path), "%s", configured_lib);
+    } else {
+        snprintf(lib_path, sizeof(lib_path), "%s/libstoreservicescore.so", rootfs);
+    }
+    const char *lib = lib_path;
     void *handle = android_dlopen(lib, RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
         printf("[FAIL] android_dlopen failed: %s\n", android_dlerror());
@@ -249,14 +295,19 @@ g++ -std=c++17 \
     "-L$BUILD" -lhybris-core \
     -lpthread -ldl -lrt \
     "-Wl,-rpath,$BUILD" \
-    -o "$BUILD/test_hybris_dlopen" 2>&1 | grep -v "warning:"
+    -o "$BUILD/test_hybris_dlopen"
 
 echo "  -> $BUILD/test_hybris_dlopen"
 
-echo ""
-echo "=== Running dlopen smoke test ==="
-mkdir -p /tmp/hybris-linker
-
-# Run with the Android rootfs lib64 in the hybris search path
-HYBRIS_LD_LIBRARY_PATH="/home/daksh/Git Projects/apple-music-linux/drm/rootfs/system/lib64" \
-    "$BUILD/test_hybris_dlopen" 2>&1
+if [[ -z "$HYBRIS_ROOTFS" ]]; then
+    echo ""
+    echo "=== Smoke test skipped ==="
+    echo "Set HYBRIS_ROOTFS to an Android x86-64 rootfs to run the dlopen test."
+else
+    echo ""
+    echo "=== Running dlopen smoke test ==="
+    mkdir -p /tmp/hybris-linker
+    HYBRIS_ROOTFS="$HYBRIS_ROOTFS" \
+        HYBRIS_LD_LIBRARY_PATH="$HYBRIS_ROOTFS" \
+        "$BUILD/test_hybris_dlopen"
+fi

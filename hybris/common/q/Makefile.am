@@ -39,12 +39,19 @@ q_la_SOURCES = \
 	linker_soinfo.cpp \
 	linker_tls.cpp \
 	windows_tls_backend.cpp \
+	x86_64_relocation.c \
 	linker_utils.cpp \
 	rt.cpp \
 	../strlcpy.c \
 	../strlcat.c \
 	bionic/libc/bionic/bionic_elf_tls.cpp \
 	bionic/libc/bionic/bionic_allocator.cpp
+
+if WANT_WINDOWS_PORT
+q_la_SOURCES += \
+	windows_elf_host.c \
+	windows_elf_reader.c
+endif
 
 if WANT_ARCH_ARM64
 q_la_SOURCES += \

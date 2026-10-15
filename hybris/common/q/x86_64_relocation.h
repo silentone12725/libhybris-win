@@ -23,6 +23,29 @@ typedef struct {
     int has_static_tls;
 } q_x86_64_symbol;
 
+/* ELF x86-64 relocation numbers supported by the freestanding primitive. */
+enum {
+    Q_R_X86_64_NONE = 0,
+    Q_R_X86_64_64 = 1,
+    Q_R_X86_64_PC32 = 2,
+    Q_R_X86_64_PLT32 = 4,
+    Q_R_X86_64_GLOB_DAT = 6,
+    Q_R_X86_64_JUMP_SLOT = 7,
+    Q_R_X86_64_RELATIVE = 8,
+    Q_R_X86_64_32 = 10,
+    Q_R_X86_64_32S = 11,
+    Q_R_X86_64_16 = 12,
+    Q_R_X86_64_PC16 = 13,
+    Q_R_X86_64_8 = 14,
+    Q_R_X86_64_PC8 = 15,
+    Q_R_X86_64_DTPMOD64 = 16,
+    Q_R_X86_64_DTPOFF64 = 17,
+    Q_R_X86_64_TPOFF64 = 18,
+    Q_R_X86_64_DTPOFF32 = 21,
+    Q_R_X86_64_TPOFF32 = 23,
+    Q_R_X86_64_PC64 = 24
+};
+
 typedef enum {
     Q_RELOC_OK = 0,
     Q_RELOC_OUT_OF_BOUNDS,

@@ -26,6 +26,11 @@ compile() {
         $GTEST_FLAGS "$@" $GTEST_LIBS
 }
 
+compile_c() {
+    cc -std=c11 -Wall -Wextra -Werror -pedantic \
+        "-I$Q" "$@"
+}
+
 echo "=== building linked_list_test ==="
 compile "$Q/linked_list_test.cpp" -o "$BUILD/test_linked_list"
 
@@ -40,6 +45,15 @@ compile "$Q/linker_block_allocator.cpp" "$Q/linker_block_allocator_test.cpp" "$Q
 echo "=== building linker_sleb128_test ==="
 compile "$Q/linker_sleb128_test.cpp" "$Q/linker_test_globals.cpp" \
     -o "$BUILD/test_sleb128"
+
+echo "=== building x86_64_relocation_test ==="
+compile_c "$Q/x86_64_relocation.c" "$Q/x86_64_relocation_test.c" \
+    -o "$BUILD/test_x86_64_relocation"
+
+echo "=== building windows_tls_backend_test ==="
+g++ -std=c++17 -Wall -Wextra -Werror -pedantic -pthread \
+    "-I$Q" "$Q/windows_tls_backend.cpp" "$Q/windows_tls_backend_test.cpp" \
+    -o "$BUILD/test_windows_tls_backend"
 
 echo ""
 PASS=0; FAIL=0

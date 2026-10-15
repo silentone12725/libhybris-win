@@ -31,6 +31,9 @@
 #include "linker_globals.h"
 #include "linker_debug.h"
 #include "linker_utils.h"
+#if defined(_WIN32)
+#include "windows_posix_compat.h"
+#endif
 
 //#include <android-base/file.h>
 #include <android-base/properties.h>

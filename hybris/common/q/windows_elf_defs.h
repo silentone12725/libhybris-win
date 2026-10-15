@@ -15,7 +15,16 @@ typedef uint64_t Elf64_Off;
 typedef uint16_t Elf64_Section;
 typedef uint16_t Elf64_Versym;
 
+typedef struct {
+  uint64_t a_type;
+  union {
+    uint64_t a_val;
+    uint64_t a_ptr;
+  } a_un;
+} Elf64_auxv_t;
+
 typedef uint32_t Elf32_Word;
+typedef uint32_t Elf32_Addr;
 typedef uint64_t Elf64_Relr;
 typedef uint32_t Elf32_Relr;
 
@@ -202,7 +211,14 @@ typedef struct { Elf64_Word vna_hash; Elf64_Half vna_flags, vna_other; Elf64_Wor
 #define DT_PREINIT_ARRAY 32
 #define DT_PREINIT_ARRAYSZ 33
 #define DT_SYMTAB_SHNDX 34
+#define DT_ENCODING 32
+#define DT_LOOS 0x60000000
+#define DT_HIOS 0x6fffffff
+#define DT_LOPROC 0x70000000
+#define DT_HIPROC 0x7fffffff
 #define DT_GNU_HASH 0x6ffffef5
+#define DT_TLSDESC_PLT 0x6ffffef6
+#define DT_TLSDESC_GOT 0x6ffffef7
 #define DT_VERSYM 0x6ffffff0
 #define DT_RELACOUNT 0x6ffffff9
 #define DT_RELCOUNT 0x6ffffffa
@@ -213,6 +229,7 @@ typedef struct { Elf64_Word vna_hash; Elf64_Half vna_flags, vna_other; Elf64_Wor
 #define DT_VERNEEDNUM 0x6fffffff
 
 #define DF_TEXTREL 0x4
+#define DF_SYMBOLIC 0x2
 #define DF_BIND_NOW 0x8
 #define DF_1_NOW 0x1
 #define DF_1_GLOBAL 0x2
@@ -250,6 +267,23 @@ typedef struct { Elf64_Word vna_hash; Elf64_Half vna_flags, vna_other; Elf64_Wor
 #define R_X86_64_SIZE64 33
 #define R_X86_64_TLSDESC 36
 #define R_X86_64_IRELATIVE 37
+
+#define STT_GNU_IFUNC 10
+
+#define VER_FLG_BASE 0x1
+#define VER_NDX_LOCAL 0
+#define VER_NDX_GLOBAL 1
+
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+#ifndef MAP_FIXED
+#define MAP_FIXED 0
+#endif
+
+#ifndef powerof2
+#define powerof2(value) ((value) != 0 && (((value) & ((value) - 1)) == 0))
+#endif
 
 #ifndef ElfW
 #define ElfW(type) Elf64_##type

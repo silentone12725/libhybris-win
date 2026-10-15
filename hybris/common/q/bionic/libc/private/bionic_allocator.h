@@ -28,6 +28,23 @@
 
 #pragma once
 
+#if defined(_WIN32)
+#include <malloc.h>
+#include <stddef.h>
+#include <stdint.h>
+
+class BionicAllocator {
+ public:
+  constexpr BionicAllocator() = default;
+  void* alloc(size_t size);
+  void* memalign(size_t align, size_t size);
+  void* realloc(void* ptr, size_t size);
+  void free(void* ptr);
+  size_t get_chunk_size(void* ptr);
+};
+
+#else
+
 #include <errno.h>
 #include <stdlib.h>
 #include <sys/cdefs.h>
@@ -127,3 +144,5 @@ class BionicAllocator {
   BionicSmallObjectAllocator* allocators_;
   uint8_t allocators_buf_[sizeof(BionicSmallObjectAllocator)*kSmallObjectAllocatorsCount];
 };
+
+#endif

@@ -1,6 +1,7 @@
 AC_INIT([libhybris], [0.1.0])
 AC_CONFIG_SRCDIR([Makefile.am])
 AC_CONFIG_HEADERS(config.h)
+AC_CANONICAL_HOST
 AM_INIT_AUTOMAKE([dist-bzip2 subdir-objects])
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 
@@ -21,6 +22,16 @@ AC_DISABLE_STATIC
 AC_PROG_LIBTOOL
 AM_PROG_AS
 
+case "$host_os" in
+  mingw*|msys*|cygwin*|win32*)
+    windows_port=yes
+    ;;
+  *)
+    windows_port=no
+    ;;
+esac
+AM_CONDITIONAL([WANT_WINDOWS_PORT], [test x"$windows_port" = xyes])
+
 AC_SUBST(CFLAGS)
 AC_SUBST(CPPFLAGS)
 AC_SUBST(LDFLAGS)
@@ -34,8 +45,12 @@ AC_SUBST([LT_CURRENT])
 AC_SUBST([LT_REVISION])
 AC_SUBST([LT_AGE])
 
-AC_CHECK_LIB(dl, dlopen, dummy=yes, AC_MSG_ERROR(dynamic linking loader is required))
-AC_CHECK_LIB(rt, clock_gettime, dummy=yes, AC_MSG_ERROR(librt is required))
+AS_IF([test x"$windows_port" = xyes], [
+  AC_MSG_NOTICE([using the Windows loader and timing APIs])
+], [
+  AC_CHECK_LIB(dl, dlopen, dummy=yes, AC_MSG_ERROR(dynamic linking loader is required))
+  AC_CHECK_LIB(rt, clock_gettime, dummy=yes, AC_MSG_ERROR(librt is required))
+])
 
 AC_ARG_ENABLE(debug,
   [  --enable-debug            Enable debug build (default=disabled)],
