@@ -44,6 +44,7 @@
 #include "linker_utils.h"
 
 #include "hybris_compat.h"
+#include "hybris/common/abi_thunks.h"
 
 #define ELF_ST_TYPE(x) ((x) & 0xf)
 
@@ -389,7 +390,8 @@ static void call_function(const char* function_name __attribute__((__unused__)),
   }
 
   TRACE("[ Calling c-tor %s @ %p for '%s' ]", function_name, function, realpath);
-  function(g_argc, g_argv, g_envp);
+  (void)hybris_abi_call_sysv_ctor(
+      reinterpret_cast<hybris_abi_sysv_ctor_fn>(function), g_argc, g_argv, g_envp);
   TRACE("[ Done calling c-tor %s @ %p for '%s' ]", function_name, function, realpath);
 }
 
@@ -401,7 +403,7 @@ static void call_function(const char* function_name __attribute__((__unused__)),
   }
 
   TRACE("[ Calling d-tor %s @ %p for '%s' ]", function_name, function, realpath);
-  function();
+  (void)hybris_abi_call_sysv_dtor(reinterpret_cast<hybris_abi_sysv_dtor_fn>(function));
   TRACE("[ Done calling d-tor %s @ %p for '%s' ]", function_name, function, realpath);
 }
 

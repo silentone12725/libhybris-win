@@ -28,6 +28,10 @@
 
 #include "private/bionic_elf_tls.h"
 
+#if defined(_WIN32)
+#include "q/linker_tls.h"
+#endif
+
 #include <async_safe/CHECK.h>
 #include <async_safe/log.h>
 #include <string.h>
@@ -342,6 +346,9 @@ if (posix_memalign(&mod_ptr, segment.alignment, segment.size) != 0) {
 // TLS_GET_ADDR_CCONV is unset. 32-bit x86 uses ___tls_get_addr instead and a
 // regparm() calling convention.
 extern "C" void* TLS_GET_ADDR(const TlsIndex* ti) TLS_GET_ADDR_CCONV {
+#if defined(_WIN32)
+  return linker_tls_get_addr(ti);
+#else
   TlsDtv* dtv = __get_tcb_dtv(__get_bionic_tcb());
 
   // TODO: See if we can use a relaxed memory ordering here instead.
@@ -354,6 +361,7 @@ extern "C" void* TLS_GET_ADDR(const TlsIndex* ti) TLS_GET_ADDR_CCONV {
   }
 
   return tls_get_addr_slow_path(ti);
+#endif
 }
 
 // This function frees:
@@ -362,6 +370,9 @@ extern "C" void* TLS_GET_ADDR(const TlsIndex* ti) TLS_GET_ADDR_CCONV {
 //
 // The caller must have already blocked signals.
 void __free_dynamic_tls(bionic_tcb* tcb) {
+#if defined(_WIN32)
+  (void)tcb;
+#else
   TlsModules& modules = __libc_shared_globals()->tls_modules;
   BionicAllocator& allocator = __libc_shared_globals()->tls_allocator;
 
@@ -401,6 +412,7 @@ void __free_dynamic_tls(bionic_tcb* tcb) {
 
   // Clear the DTV slot. The DTV must not be used again with this thread.
   tcb->tls_slot(TLS_SLOT_DTV) = nullptr;
+#endif
 }
 
 // Invokes all the registered thread_exit callbacks, if any.

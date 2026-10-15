@@ -30,6 +30,11 @@
 
 #include <vector>
 
+#if defined(_WIN32)
+#include <mutex>
+#include "windows_tls_backend.h"
+#endif
+
 #include <android/versioning.h>
 #include "async_safe/CHECK.h"
 #include "private/ScopedRWLock.h"
@@ -46,6 +51,18 @@ __LIBC_HIDDEN__ _Atomic(size_t) __libc_tls_generation_copy = {SIZE_MAX};
 
 static bool g_static_tls_finished;
 static std::vector<TlsModule> g_tls_modules;
+
+#if defined(_WIN32)
+static q_tls::TlsBackend* g_windows_tls_backend;
+static std::once_flag g_windows_tls_backend_once;
+
+static q_tls::TlsBackend* get_windows_tls_backend() {
+  std::call_once(g_windows_tls_backend_once, [] {
+    g_windows_tls_backend = q_tls::backend_create();
+  });
+  return g_windows_tls_backend;
+}
+#endif
 
 static size_t get_unused_module_index() {
   for (size_t i = 0; i < g_tls_modules.size(); ++i) {
@@ -82,6 +99,20 @@ static void register_tls_module(soinfo* si, size_t static_offset) {
   g_tls_modules[module_idx].static_offset = static_offset;
   g_tls_modules[module_idx].first_generation = new_generation;
   g_tls_modules[module_idx].soinfo_ptr = si;
+
+#if defined(_WIN32)
+  const TlsModule& segment = g_tls_modules[module_idx];
+  q_tls::TlsModule windows_module = {
+      si_tls->module_id,
+      segment.segment.init_ptr,
+      segment.segment.init_size,
+      segment.segment.size,
+      segment.segment.alignment,
+      nullptr};
+  q_tls::TlsBackend* backend = get_windows_tls_backend();
+  CHECK(backend != nullptr);
+  CHECK(q_tls::backend_register_module(backend, windows_module));
+#endif
 }
 
 static void unregister_tls_module(soinfo* si) {
@@ -92,6 +123,11 @@ static void unregister_tls_module(soinfo* si) {
   TlsModule& mod = g_tls_modules[__tls_module_id_to_idx(si_tls->module_id)];
   CHECK(mod.static_offset == SIZE_MAX);
   CHECK(mod.soinfo_ptr == si);
+#if defined(_WIN32)
+  q_tls::TlsBackend* backend = get_windows_tls_backend();
+  CHECK(backend != nullptr);
+  CHECK(q_tls::backend_unregister_module(backend, si_tls->module_id));
+#endif
   mod = {};
   si_tls->module_id = kTlsUninitializedModuleId;
 }
@@ -137,10 +173,15 @@ void register_soinfo_tls(soinfo* si) {
     return;
   }
   size_t static_offset = SIZE_MAX;
+#if defined(_WIN32)
+  // The Windows backend owns all Q PT_TLS storage dynamically. Do not expose
+  // the Linux static-TLS layout to relocation or thread setup on this path.
+#else
   if (!g_static_tls_finished) {
     StaticTlsLayout& layout = __libc_shared_globals()->static_tls_layout;
     static_offset = layout.reserve_solib_segment(si_tls->segment);
   }
+#endif
   register_tls_module(si, static_offset);
 }
 
@@ -151,3 +192,45 @@ void unregister_soinfo_tls(soinfo* si) {
   }
   return unregister_tls_module(si);
 }
+
+#if defined(_WIN32)
+q_tls::TlsContext* linker_tls_current_thread() {
+  q_tls::TlsBackend* backend = get_windows_tls_backend();
+  return backend == nullptr ? nullptr : q_tls::context_current(backend);
+}
+
+void** linker_tls_current_slots() {
+  q_tls::TlsBackend* backend = get_windows_tls_backend();
+  if (backend == nullptr) return nullptr;
+  return q_tls::context_slots(q_tls::context_current_or_create(backend));
+}
+
+extern "C" void** __hybris_windows_get_tls() {
+  return linker_tls_current_slots();
+}
+
+bool linker_tls_attach_current_thread() {
+  q_tls::TlsBackend* backend = get_windows_tls_backend();
+  if (backend == nullptr) return false;
+  return q_tls::context_current_or_create(backend) != nullptr;
+}
+
+bool linker_tls_detach_current_thread() {
+  q_tls::TlsBackend* backend = get_windows_tls_backend();
+  if (backend == nullptr) return false;
+  q_tls::TlsContext* context = q_tls::context_current(backend);
+  if (context == nullptr) return false;
+  if (!q_tls::context_detach(backend)) return false;
+  return q_tls::context_destroy(context);
+}
+
+void* linker_tls_get_addr(const TlsIndex* index) {
+  if (index == nullptr) return nullptr;
+  q_tls::TlsBackend* backend = get_windows_tls_backend();
+  if (backend == nullptr || q_tls::context_current_or_create(backend) == nullptr) {
+    return nullptr;
+  }
+  const q_tls::TlsIndex windows_index = {index->module_id, index->offset};
+  return q_tls::get_addr(backend, windows_index);
+}
+#endif

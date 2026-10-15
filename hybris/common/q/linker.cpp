@@ -70,6 +70,10 @@
 #include "linker_tls.h"
 #include "linker_utils.h"
 
+#if defined(_WIN32)
+#include "windows_elf_host.h"
+#endif
+
 #include "private/bionic_call_ifunc_resolver.h"
 #include "private/bionic_globals.h"
 #include "android-base/macros.h"
@@ -672,16 +676,50 @@ class LoadTask {
   }
 
   int get_fd() const {
+#if defined(_WIN32)
+    return -1;
+#else
     return fd_;
+#endif
   }
 
   void set_fd(int fd, bool assume_ownership) {
+#if defined(_WIN32)
+    UNUSED(fd);
+    UNUSED(assume_ownership);
+#else
     if (fd_ != -1 && close_fd_) {
       close(fd_);
     }
     fd_ = fd;
     close_fd_ = assume_ownership;
+#endif
   }
+
+#if defined(_WIN32)
+  const win_elf_file* get_file() const {
+    return has_file_ ? &file_ : nullptr;
+  }
+
+  uint64_t get_file_size() const {
+    return has_file_ ? file_.size : 0;
+  }
+
+  void set_file(win_elf_file* file, bool assume_ownership) {
+    if (has_file_ && close_file_) {
+      win_elf_file_close(&file_);
+    }
+    has_file_ = file != nullptr && file->handle != INVALID_HANDLE_VALUE;
+    close_file_ = assume_ownership && has_file_;
+    if (has_file_) {
+      file_ = *file;
+      file->handle = INVALID_HANDLE_VALUE;
+      file->size = 0;
+    } else {
+      file_ = {};
+    }
+  }
+#endif
 
   const android_dlextinfo* get_extinfo() const {
     return extinfo_;
@@ -720,7 +758,11 @@ class LoadTask {
 
   bool read(const char* realpath, off64_t file_size) {
     ElfReader& elf_reader = get_elf_reader();
+#if defined(_WIN32)
+    return elf_reader.Read(realpath, get_file(), file_offset_, file_size);
+#else
     return elf_reader.Read(realpath, fd_, file_offset_, file_size);
+#endif
   }
 
   bool load(address_space_params* address_space) {
@@ -745,21 +787,38 @@ class LoadTask {
            android_namespace_t* start_from,
            std::unordered_map<const soinfo*, ElfReader>* readers_map)
     : name_(name), needed_by_(needed_by), si_(nullptr),
-      fd_(-1), close_fd_(false), file_offset_(0), elf_readers_map_(readers_map),
+#if defined(_WIN32)
+      file_{}, has_file_(false), close_file_(false), file_offset_(0),
+#else
+      fd_(-1), close_fd_(false), file_offset_(0),
+#endif
+      elf_readers_map_(readers_map),
       is_dt_needed_(false), start_from_(start_from) {}
 
   ~LoadTask() {
+#if defined(_WIN32)
+    if (has_file_ && close_file_) {
+      win_elf_file_close(&file_);
+    }
+#else
     if (fd_ != -1 && close_fd_) {
       close(fd_);
     }
+#endif
   }
 
   const char* name_;
   soinfo* needed_by_;
   soinfo* si_;
   const android_dlextinfo* extinfo_;
+#if defined(_WIN32)
+  win_elf_file file_;
+  bool has_file_;
+  bool close_file_;
+#else
   int fd_;
   bool close_fd_;
+#endif
   off64_t file_offset_;
   std::unordered_map<const soinfo*, ElfReader>* elf_readers_map_;
   // TODO(dimitry): needed by workaround for http://b/26394120 (the grey-list)
@@ -1200,6 +1259,63 @@ static int open_library(android_namespace_t* ns,
   return fd;
 }
 
+#if defined(_WIN32)
+static bool open_library_at_path_win(const char* path, off64_t* file_offset,
+                                     win_elf_file* file, std::string* realpath) {
+  if (!win_elf_file_open(path, file)) {
+    return false;
+  }
+
+  *file_offset = 0;
+  *realpath = path;
+  return true;
+}
+
+static bool open_library_on_paths_win(const char* name, off64_t* file_offset,
+                                      win_elf_file* file,
+                                      const std::vector<std::string>& paths,
+                                      std::string* realpath) {
+  for (const auto& path : paths) {
+    char buf[512];
+    if (!format_path(buf, sizeof(buf), path.c_str(), name)) {
+      continue;
+    }
+
+    if (open_library_at_path_win(buf, file, file_offset, realpath)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static bool open_library_win(android_namespace_t* ns, const char* name,
+                             soinfo* needed_by, off64_t* file_offset,
+                             win_elf_file* file, std::string* realpath) {
+  const bool has_path = strchr(name, '/') != nullptr || strchr(name, '\\') != nullptr;
+  if (has_path) {
+    return open_library_at_path_win(name, file_offset, file, realpath);
+  }
+
+  if (open_library_on_paths_win(name, file_offset, file,
+                                ns->get_ld_library_paths(), realpath)) {
+    return true;
+  }
+
+  if (needed_by != nullptr &&
+      open_library_on_paths_win(name, file_offset, file,
+                                needed_by->get_dt_runpath(), realpath)) {
+    if (ns->is_accessible(*realpath)) {
+      return true;
+    }
+    win_elf_file_close(file);
+  }
+
+  return open_library_on_paths_win(name, file_offset, file,
+                                   ns->get_default_library_paths(), realpath);
+}
+#endif
+
 int open_executable(const char* path, off64_t* file_offset, std::string* realpath) {
   ZipArchiveCache zip_archive_cache;
   return open_library_at_path(&zip_archive_cache, path, file_offset, realpath);
@@ -1308,6 +1424,15 @@ static bool load_library(android_namespace_t* ns,
     return false;
   }
 
+#if defined(_WIN32)
+  const uint64_t file_size = task->get_file_size();
+  if (file_size > static_cast<uint64_t>(INT64_MAX) ||
+      static_cast<uint64_t>(file_offset) >= file_size) {
+    DL_ERR("file offset for the library \"%s\" >= file size: %" PRId64 " >= %" PRIu64,
+           name, file_offset, file_size);
+    return false;
+  }
+#else
   struct stat file_stat;
   if (TEMP_FAILURE_RETRY(fstat(task->get_fd(), &file_stat)) != 0) {
     DL_ERR("unable to stat file for the library \"%s\": %s", name, strerror(errno));
@@ -1332,12 +1457,14 @@ static bool load_library(android_namespace_t* ns,
       return true;
     }
   }
+#endif
 
   if ((rtld_flags & RTLD_NOLOAD) != 0) {
     DL_ERR("library \"%s\" wasn't loaded and RTLD_NOLOAD prevented it", name);
     return false;
   }
 
+#if !defined(_WIN32)
   struct statfs fs_stat;
   if (TEMP_FAILURE_RETRY(fstatfs(task->get_fd(), &fs_stat)) != 0) {
     DL_ERR("unable to fstatfs file for the library \"%s\": %s", name, strerror(errno));
@@ -1389,8 +1516,23 @@ static bool load_library(android_namespace_t* ns,
       return false;
     }
   }
+#else
+  if (!ns->is_accessible(realpath)) {
+    const soinfo* needed_by = task->is_dt_needed() ? task->get_needed_by() : nullptr;
+    if (!is_greylisted(ns, name, needed_by)) {
+      DL_ERR("library \"%s\" needed or dlopened by \"%s\" is not accessible for the namespace \"%s\"",
+             name, task->get_needed_by() == nullptr ? "(unknown)" :
+             task->get_needed_by()->get_realpath(), ns->get_name());
+      return false;
+    }
+  }
+#endif
 
+#if defined(_WIN32)
+  soinfo* si = soinfo_alloc(ns, realpath.c_str(), nullptr, file_offset, rtld_flags);
+#else
   soinfo* si = soinfo_alloc(ns, realpath.c_str(), &file_stat, file_offset, rtld_flags);
+#endif
   if (si == nullptr) {
     return false;
   }
@@ -1398,7 +1540,11 @@ static bool load_library(android_namespace_t* ns,
   task->set_soinfo(si);
 
   // Read the ELF header and some of the segments.
+#if defined(_WIN32)
+  if (!task->read(realpath.c_str(), static_cast<off64_t>(file_size))) {
+#else
   if (!task->read(realpath.c_str(), file_stat.st_size)) {
+#endif
     soinfo_free(si);
     task->set_soinfo(nullptr);
     return false;
@@ -1446,6 +1592,24 @@ static bool load_library(android_namespace_t* ns,
   soinfo* needed_by = task->get_needed_by();
   const android_dlextinfo* extinfo = task->get_extinfo();
 
+#if defined(_WIN32)
+  if (extinfo != nullptr && (extinfo->flags & ANDROID_DLEXT_USE_LIBRARY_FD) != 0) {
+    DL_ERR("library fd loading is not supported by the Windows ELF file backend");
+    return false;
+  }
+
+  off64_t file_offset = 0;
+  std::string realpath;
+  win_elf_file file = {};
+  if (!open_library_win(ns, name, needed_by, &file_offset, &file, &realpath)) {
+    DL_ERR("library \"%s\" not found", name);
+    return false;
+  }
+
+  task->set_file(&file, true);
+  task->set_file_offset(file_offset);
+  return load_library(ns, task, load_tasks, rtld_flags, realpath, search_linked_namespaces);
+#else
   off64_t file_offset;
   std::string realpath;
   if (extinfo != nullptr && (extinfo->flags & ANDROID_DLEXT_USE_LIBRARY_FD) != 0) {
@@ -1480,6 +1644,7 @@ static bool load_library(android_namespace_t* ns,
   task->set_file_offset(file_offset);
 
   return load_library(ns, task, load_tasks, rtld_flags, realpath, search_linked_namespaces);
+#endif
 }
 
 static bool find_loaded_library_by_soname(android_namespace_t* ns,
@@ -1504,7 +1669,11 @@ static bool find_loaded_library_by_soname(android_namespace_t* ns,
   *candidate = nullptr;
 
   // Ignore filename with path.
-  if (strchr(name, '/') != nullptr) {
+  bool has_path = strchr(name, '/') != nullptr;
+#if defined(_WIN32)
+  has_path = has_path || strchr(name, '\\') != nullptr;
+#endif
+  if (has_path) {
     return false;
   }
 

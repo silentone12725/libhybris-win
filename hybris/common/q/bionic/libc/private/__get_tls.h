@@ -29,7 +29,13 @@
 #ifndef __BIONIC_PRIVATE_GET_TLS_H_
 #define __BIONIC_PRIVATE_GET_TLS_H_
 
-#if defined(__aarch64__)
+#if defined(_WIN32)
+// Windows does not expose the Android/Bionic thread pointer through the x64
+// segment-register ABI. The Q Windows TLS bridge provides the dynamic access
+// entry point and a per-context slot array for code that uses Bionic slots.
+extern "C" void** __hybris_windows_get_tls();
+# define __get_tls() __hybris_windows_get_tls()
+#elif defined(__aarch64__)
 # define __get_tls() ({ void** __val; __asm__("mrs %0, tpidr_el0" : "=r"(__val)); __val; })
 #elif defined(__arm__)
 # define __get_tls() ({ void** __val; __asm__("mrc p15, 0, %0, c13, c0, 3" : "=r"(__val)); __val; })

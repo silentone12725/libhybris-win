@@ -27,6 +27,7 @@
  */
 
 #include "private/bionic_call_ifunc_resolver.h"
+#include "hybris/common/abi_thunks.h"
 #include <sys/auxv.h>
 #include <sys/ifunc.h>
 
@@ -40,7 +41,9 @@ ElfW(Addr) __bionic_call_ifunc_resolver(ElfW(Addr) resolver_addr) {
   static unsigned long hwcap = getauxval(AT_HWCAP);
   return reinterpret_cast<ifunc_resolver_t>(resolver_addr)(hwcap);
 #else
-  typedef ElfW(Addr) (*ifunc_resolver_t)(void);
-  return reinterpret_cast<ifunc_resolver_t>(resolver_addr)();
+  uintptr_t result = 0;
+  const hybris_abi_status status = hybris_abi_call_sysv_ifunc0(
+      reinterpret_cast<hybris_abi_sysv_ifunc0_fn>(resolver_addr), &result);
+  return status == HYBRIS_ABI_STATUS_OK ? static_cast<ElfW(Addr)>(result) : 0;
 #endif
 }

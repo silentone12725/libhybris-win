@@ -34,6 +34,7 @@ libhybris_common_la_SOURCES = \
 	native_handle.c \
 	sysconf.c \
 	dso_handle_counters.cpp \
+	abi_thunks.c \
 	legacy_properties/properties.c \
 	legacy_properties/cache.c
 

@@ -199,7 +199,10 @@ struct TlsIndex {
   size_t offset;
 };
 
-#if defined(__i386__)
+#if defined(_WIN32)
+#define TLS_GET_ADDR_CCONV
+#define TLS_GET_ADDR __hybris_tls_get_addr
+#elif defined(__i386__)
 #define TLS_GET_ADDR_CCONV __attribute__((regparm(1)))
 #define TLS_GET_ADDR ___tls_get_addr
 #else

@@ -38,6 +38,7 @@ q_la_SOURCES = \
 	linker_sdk_versions.cpp \
 	linker_soinfo.cpp \
 	linker_tls.cpp \
+	windows_tls_backend.cpp \
 	linker_utils.cpp \
 	rt.cpp \
 	../strlcpy.c \

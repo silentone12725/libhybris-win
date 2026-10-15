@@ -32,6 +32,10 @@
 
 #include "private/bionic_elf_tls.h"
 
+#if defined(_WIN32)
+#include "windows_tls_backend.h"
+#endif
+
 struct TlsModule;
 struct soinfo;
 
@@ -63,3 +67,14 @@ struct TlsDynamicResolverArg {
 extern "C" size_t tlsdesc_resolver_static(size_t);
 extern "C" size_t tlsdesc_resolver_dynamic(size_t);
 extern "C" size_t tlsdesc_resolver_unresolved_weak(size_t);
+
+#if defined(_WIN32)
+// Windows uses the FLS-backed context instead of the platform segment
+// register/TLS DTV. These helpers are the narrow Q-to-host bridge; Linux keeps
+// using the Bionic accessors above.
+q_tls::TlsContext* linker_tls_current_thread();
+void** linker_tls_current_slots();
+bool linker_tls_attach_current_thread();
+bool linker_tls_detach_current_thread();
+void* linker_tls_get_addr(const TlsIndex* index);
+#endif
