@@ -109,6 +109,9 @@ CFLAGS_COMMON=(
 TARGET_TRIPLE="$(g++ -dumpmachine 2>/dev/null || true)"
 if [[ "$TARGET_TRIPLE" != *mingw* && "$TARGET_TRIPLE" != *msys* ]]; then
     CFLAGS_COMMON+=("-DDEFAULT_HYBRIS_LD_LIBRARY_PATH=\"$LD_LIBRARY_PATH_DEFAULT\"")
+    LINK_LIBS=(-lpthread -ldl -lrt -lsupc++)
+else
+    LINK_LIBS=(-lsupc++)
 fi
 
 compile_src() {
@@ -160,6 +163,9 @@ Q_SRCS=(
     "$COMMON/strlcpy.c"
     "$COMMON/strlcat.c"
 )
+if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]]; then
+    Q_SRCS+=("$Q/windows_elf_host.c" "$Q/windows_elf_reader.c")
+fi
 Q_OBJS=()
 for src in "${Q_SRCS[@]}"; do
     echo "  CC $(basename "$src")"
@@ -170,9 +176,16 @@ echo ""
 echo "=== Linking q.so (linker plugin) ==="
 mkdir -p /tmp/hybris-linker
 g++ -shared -fPIC -o /tmp/hybris-linker/q.so "${Q_OBJS[@]}" \
-    -lpthread -ldl -lrt -lsupc++
+    "${LINK_LIBS[@]}"
 echo "  -> /tmp/hybris-linker/q.so"
 ls -lh /tmp/hybris-linker/q.so
+
+if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]]; then
+    echo ""
+    echo "=== Windows Q-linker build complete ==="
+    echo "The POSIX libhybris-core wrapper is not part of this Windows Q-linker target."
+    exit 0
+fi
 
 # ── Step 2: Build libhybris-core.so (public API + hooks) ──────────────────
 echo ""
@@ -196,7 +209,7 @@ done
 echo ""
 echo "=== Linking libhybris-core.so ==="
 g++ -shared -fPIC -o "$BUILD/libhybris-core.so" "${COMMON_OBJS[@]}" \
-    -lpthread -ldl -lrt -lsupc++
+    "${LINK_LIBS[@]}"
 
 echo "  -> $BUILD/libhybris-core.so"
 ls -lh "$BUILD/libhybris-core.so"
@@ -293,7 +306,7 @@ g++ -std=c++17 \
     "-I$INC" "-I$COMMON" "-I$BUILD/stub" \
     "$BUILD/test_hybris_dlopen.cpp" \
     "-L$BUILD" -lhybris-core \
-    -lpthread -ldl -lrt \
+    "${LINK_LIBS[@]}" \
     "-Wl,-rpath,$BUILD" \
     -o "$BUILD/test_hybris_dlopen"
 

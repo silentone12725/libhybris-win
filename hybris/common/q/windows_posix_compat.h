@@ -67,6 +67,10 @@ static inline int hybris_windows_dprintf(int fd, const char* format, ...) {
 #define DEFAULT_HYBRIS_LD_LIBRARY_PATH "/system/lib64:/vendor/lib64:/odm/lib64"
 #endif
 
+#ifndef O_NOFOLLOW
+#define O_NOFOLLOW 0
+#endif
+
 #define basename hybris_windows_basename
 #define stpcpy hybris_windows_stpcpy
 #define realpath hybris_windows_realpath

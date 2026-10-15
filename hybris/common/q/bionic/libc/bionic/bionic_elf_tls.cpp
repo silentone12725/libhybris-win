@@ -30,6 +30,12 @@
 
 #if defined(_WIN32)
 #include "q/linker_tls.h"
+#ifndef MIN
+#define MIN(first, second) ((first) < (second) ? (first) : (second))
+#endif
+#ifndef MAX
+#define MAX(first, second) ((first) > (second) ? (first) : (second))
+#endif
 #endif
 
 #include <async_safe/CHECK.h>

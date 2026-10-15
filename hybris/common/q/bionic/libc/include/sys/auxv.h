@@ -12,6 +12,7 @@
 #define AT_BASE 7
 #define AT_SECURE 23
 #define AT_SYSINFO_EHDR 33
+#define AT_PAGESZ 6
 
 static inline unsigned long getauxval(unsigned long type) {
   (void)type;

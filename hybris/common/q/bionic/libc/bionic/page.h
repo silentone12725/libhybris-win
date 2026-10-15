@@ -20,11 +20,19 @@
 #include <stdint.h>
 #include <sys/auxv.h>
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
 // For PAGE_SIZE.
 #include <sys/user.h>
+#endif
 
 inline size_t page_size() {
-#if defined(PAGE_SIZE)
+#if defined(_WIN32)
+  SYSTEM_INFO system_info;
+  GetSystemInfo(&system_info);
+  return system_info.dwPageSize;
+#elif defined(PAGE_SIZE)
   return PAGE_SIZE;
 #else
   static const size_t page_size = getauxval(AT_PAGESZ);

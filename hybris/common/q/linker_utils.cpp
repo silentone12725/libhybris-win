@@ -41,7 +41,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <stdarg.h>
+#if !defined(_WIN32)
 #include <linux/limits.h>
+#endif
 #include <fcntl.h>
 
 #include <sstream>

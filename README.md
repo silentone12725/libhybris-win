@@ -155,9 +155,11 @@ HYBRIS_ROOTFS=/c/path/to/android/rootfs ./build-and-test-windows.sh
 ```
 
 This validates the Windows file reader, PT_LOAD reservation/commit/protection,
-FLS-backed TLS backend, and x86-64 relocation primitives. The complete Q
-linker still requires additional Windows replacements for the remaining
-POSIX/Bionic synchronization and runtime seams.
+FLS-backed TLS backend, and x86-64 relocation primitives. The native Windows
+build script also compiles and links the complete Q linker plugin (`q.so`);
+the POSIX `libhybris-core` wrapper is intentionally a separate target and
+still requires additional Windows replacements for its remaining runtime
+seams.
 
 ### Windows MSYS2/UCRT64
 
