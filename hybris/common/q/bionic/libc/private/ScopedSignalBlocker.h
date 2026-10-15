@@ -16,7 +16,9 @@
 
 #pragma once
 
+#if !defined(_WIN32)
 #include <signal.h>
+#endif
 
 #include <limits.h>
 #include <sys/cdefs.h>
@@ -33,12 +35,16 @@
 #define _NSIG (_KERNEL__NSIG + 1)
 #define NSIG _NSIG
 
+#if !defined(_WIN32)
 typedef int sig_atomic_t;
 
 typedef __sighandler_t sig_t; /* BSD compatibility. */
 typedef __sighandler_t sighandler_t; /* glibc compatibility. */
+#endif
 
-#if defined(__LP64__) || defined(__mips__)
+#if defined(_WIN32)
+typedef unsigned long sigset64_t;
+#elif defined(__LP64__) || defined(__mips__)
 typedef sigset_t sigset64_t;
 #else
 typedef struct { unsigned long __bits[_KERNEL__NSIG/LONG_BIT]; } sigset64_t;
@@ -51,6 +57,12 @@ typedef struct { unsigned long __bits[_KERNEL__NSIG/LONG_BIT]; } sigset64_t;
 
 class ScopedSignalBlocker {
  public:
+#if defined(_WIN32)
+  explicit ScopedSignalBlocker() {}
+  explicit ScopedSignalBlocker(int) {}
+  ~ScopedSignalBlocker() = default;
+  void reset() {}
+#else
   // Block all signals.
   explicit ScopedSignalBlocker() {
     //sigfillset64(&set);
@@ -83,4 +95,5 @@ class ScopedSignalBlocker {
   sigset_t old_mask;
 
   BIONIC_DISALLOW_COPY_AND_ASSIGN(ScopedSignalBlocker);
+#endif
 };

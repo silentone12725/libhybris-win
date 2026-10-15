@@ -30,6 +30,8 @@
 
 #include <errno.h>
 #if defined(_WIN32)
+#include <stdint.h>
+#include <time.h>
 #include <windows.h>
 #else
 #include <linux/futex.h>
@@ -45,16 +47,36 @@
 struct timespec;
 
 #if defined(_WIN32)
+static inline DWORD __bionic_futex_timeout(const timespec* abs_timeout) {
+  if (abs_timeout == nullptr) return INFINITE;
+
+  FILETIME file_time;
+  GetSystemTimeAsFileTime(&file_time);
+  const uint64_t windows_now = (static_cast<uint64_t>(file_time.dwHighDateTime) << 32) |
+                               file_time.dwLowDateTime;
+  // FILETIME is 100ns since 1601-01-01; timespec is ns since Unix epoch.
+  const uint64_t unix_now_ns = (windows_now - UINT64_C(116444736000000000)) * 100;
+  const uint64_t deadline_ns = static_cast<uint64_t>(abs_timeout->tv_sec) * UINT64_C(1000000000) +
+                               static_cast<uint64_t>(abs_timeout->tv_nsec);
+  if (deadline_ns <= unix_now_ns) return 0;
+  const uint64_t remaining_ms = (deadline_ns - unix_now_ns + UINT64_C(999999)) / UINT64_C(1000000);
+  return remaining_ms >= INFINITE ? INFINITE - 1 : static_cast<DWORD>(remaining_ms);
+}
+
 static inline int __futex_wait_ex(volatile void* ftx, bool shared, int value,
-                                  bool use_realtime_clock, const timespec* abs_timeout) {
+                                   bool use_realtime_clock, const timespec* abs_timeout) {
   (void)shared;
   (void)use_realtime_clock;
-  (void)abs_timeout;
-  while (InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(const_cast<void*>(ftx)),
-                                     value, value) == value) {
-    WaitOnAddress(const_cast<void*>(ftx), &value, sizeof(value), INFINITE);
+  for (;;) {
+    if (WaitOnAddress(const_cast<void*>(ftx), &value, sizeof(value),
+                      __bionic_futex_timeout(abs_timeout))) {
+      return 0;
+    }
+    if (GetLastError() == ERROR_TIMEOUT) return -ETIMEDOUT;
+    // A wakeup can race with a value change.  Re-check the value before
+    // waiting again, matching FUTEX_WAIT's compare-and-sleep behavior.
+    if (*static_cast<volatile const int*>(ftx) != value) return 0;
   }
-  return 0;
 }
 #else
 __LIBC_HIDDEN__ int __futex_wait_ex(volatile void* ftx, bool shared, int value,
@@ -122,7 +144,7 @@ static inline int __futex_pi_unlock(volatile void* ftx, bool shared) {
 #if defined(_WIN32)
   (void)ftx;
   (void)shared;
-  return -1;
+  return -ENOSYS;
 #else
   return __futex(ftx, shared ? FUTEX_UNLOCK_PI : FUTEX_UNLOCK_PI_PRIVATE, 0, nullptr, 0);
 #endif

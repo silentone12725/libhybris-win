@@ -85,17 +85,48 @@ utils/         Build and extraction utilities
 *.c, *.cpp     Portability helpers and tests under hybris/common/q
 ```
 
-## Build and test
+## Reproducible build and test
 
-The existing Linux-oriented build remains Autotools-based. A local Q unit-test
-runner is available:
+The existing Linux-oriented build remains Autotools-based, while the
+portability work has a dependency-light host regression suite. The checked-in
+`.tool-versions` records the toolchain versions used for validation (the
+Docker image is the canonical clean-room environment).
+
+### Linux setup and checks
+
+Install Docker, then build the project-local validation image. The image
+installs all compiler, GoogleTest, Autotools, and fixture-generation
+dependencies; after the image is built, test execution is offline:
 
 ```bash
-./run-tests.sh
+docker build --tag libhybris-win:test .
+docker run --rm libhybris-win:test
 ```
 
-The current Linux GoogleTest baseline is 19 tests across four test binaries;
-the runner also exercises the standalone relocation and TLS backends.
+For a native Linux checkout, install GCC/G++, `libgtest-dev`, `pkg-config`,
+Python 3, and the usual Autotools packages, then run:
+
+```bash
+make test
+```
+
+`make test` is the stable test entry point and runs `run-tests.sh`, which builds
+and executes the Q linker unit tests. It also creates
+`.build/minimal-x86_64.so`, a deterministic ELF64 ET_DYN fixture used for
+format sanity validation. No Android rootfs is downloaded or checked in.
+`make validate` is an alias suitable for CI. Remove generated output with
+`make clean`.
+
+To run the longer x86-64 core-loader build validation (it does not require an
+Android rootfs):
+
+```bash
+./build-and-test-x86_64.sh
+```
+
+The current Linux GoogleTest baseline is 21 tests across five test binaries;
+the runner also exercises the standalone relocation and TLS backends, for
+seven test binaries in total.
 The Windows validation path uses the native MSYS2 UCRT64 toolchain (`gcc`,
 `g++`) and runs the resulting PE executables on Windows x64. Windows-specific
 source seams are selected with `_WIN32` and do not import the Android NDK
@@ -127,6 +158,52 @@ This validates the Windows file reader, PT_LOAD reservation/commit/protection,
 FLS-backed TLS backend, and x86-64 relocation primitives. The complete Q
 linker still requires additional Windows replacements for the remaining
 POSIX/Bionic synchronization and runtime seams.
+
+### Windows MSYS2/UCRT64
+
+Install the current MSYS2 distribution and use the **UCRT64** shell. Update
+the package database and install the pinned toolchain class and test tools:
+
+```bash
+pacman -Syu
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc \
+  mingw-w64-ucrt-x86_64-gcc-libs make bash python
+```
+
+From the repository checkout in that shell, generate the portable fixture and
+run the host unit suite with `make test`. To exercise the Windows ELF reader,
+the native test currently needs an Android x86-64 rootfs:
+
+```bash
+export HYBRIS_ROOTFS=/c/path/to/android/rootfs
+./build-and-test-windows.sh
+```
+
+The script expects `$HYBRIS_ROOTFS/system/lib64/libc.so` and runs the
+relocation, TLS, and Windows ELF mapping tests. Use forward-slash MSYS paths;
+the script handles MSYS2 argument conversion for the loader's embedded path
+defaults. The generated minimal fixture is useful for parser-level checks but
+is not a substitute for that rootfs smoke test.
+
+### Autotools packaging/deployment validation
+
+The full upstream install is optional for this portability suite. When Android
+headers and their `pkg-config` metadata are available, validate the Autotools
+distribution and install into a staging prefix (never `/usr` during checks):
+
+```bash
+cd hybris
+autoreconf -fi
+./configure --prefix="$PWD/../.build/stage" --enable-arch=x86-64 \
+  --with-android-headers=/path/to/android-headers
+make -j"$(nproc)"
+make check
+make DESTDIR="$PWD/../.build/package" install
+```
+
+The staged tree under `.build/package` is the deployment artifact for review
+or packaging. It requires matching Android headers and providers; the
+repository does not ship those dependencies.
 
 ## Scope and disclaimer
 

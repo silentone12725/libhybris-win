@@ -1,5 +1,6 @@
 Makefile.in
 Makefile
+!/Makefile
 *.o
 *.lo
 *.loT
@@ -85,3 +86,5 @@ hybris/tests/test_vibrator
 hybris/tests/test_vulkan
 hybris/tests/test_wifi
 
+# Reproducible local fixture/build output
+.build/

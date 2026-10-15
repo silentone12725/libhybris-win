@@ -28,6 +28,16 @@
 
 #pragma once
 
+#if defined(_WIN32)
+#include <signal.h>
+
+// Windows has no rt_tgsigqueueinfo equivalent.  Raising through the CRT keeps
+// the current-process signal semantics and avoids inventing Linux syscall IDs.
+static inline __attribute__((always_inline)) void inline_raise(int sig, void* value = nullptr) {
+  (void)value;
+  (void)raise(sig);
+}
+#else
 #include <sys/cdefs.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -64,4 +74,4 @@ static inline __always_inline void inline_raise(int sig, void* value = nullptr) 
   syscall(__NR_rt_tgsigqueueinfo, pid, tid, sig, &info);
 #endif
 }
-
+#endif

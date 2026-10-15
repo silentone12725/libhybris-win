@@ -1,0 +1,7 @@
+# Tool versions used by the reproducibility Docker image and local validation.
+gcc 12.2.0
+autoconf 2.71
+automake 1.16.5
+libtool 2.4.7
+pkg-config 1.8.1
+python 3.11.2

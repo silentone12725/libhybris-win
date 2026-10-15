@@ -36,9 +36,7 @@
 #include <atomic>
 
 #include <async_safe/log.h>
-#include <sys/syscall.h>
-
-#define gettid() syscall(SYS_gettid)
+#include "private/bionic_thread_id.h"
 
 #if DISABLED_FOR_HYBRIS_SUPPORT
 static BionicAllocator g_bionic_allocator;
@@ -48,14 +46,14 @@ static std::atomic<pid_t> fallback_tid(0);
 // case the linker heap is corrupted. Do not use this function.
 extern "C" bool __linker_enable_fallback_allocator() {
   pid_t expected = 0;
-  return fallback_tid.compare_exchange_strong(expected, gettid());
+  return fallback_tid.compare_exchange_strong(expected, bionic_get_thread_id());
 }
 
 extern "C" void __linker_disable_fallback_allocator() {
   pid_t previous = fallback_tid.exchange(0);
   if (previous == 0) {
     async_safe_fatal("attempted to disable unused fallback allocator");
-  } else if (previous != gettid()) {
+  } else if (previous != bionic_get_thread_id()) {
     async_safe_fatal("attempted to disable fallback allocator in use by another thread (%d)",
                      previous);
   }
@@ -69,7 +67,7 @@ static BionicAllocator& get_fallback_allocator() {
 #define __predict_false(exp) __builtin_expect((exp) != 0, 0)
 
 static BionicAllocator& get_allocator() {
-  if (__predict_false(fallback_tid) && __predict_false(gettid() == fallback_tid)) {
+  if (__predict_false(fallback_tid) && __predict_false(bionic_get_thread_id() == fallback_tid)) {
     return get_fallback_allocator();
   }
   return g_bionic_allocator;

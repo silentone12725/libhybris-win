@@ -35,7 +35,10 @@ echo "=== building linked_list_test ==="
 compile "$Q/linked_list_test.cpp" -o "$BUILD/test_linked_list"
 
 echo "=== building linker_utils_test ==="
+cc -std=c11 -I"$ROOT/hybris/common" -c "$ROOT/hybris/common/strlcpy.c" \
+    -o "$BUILD/strlcpy.o"
 compile "$Q/linker_utils.cpp" "$Q/linker_utils_test.cpp" "$Q/linker_test_globals.cpp" \
+    "$BUILD/strlcpy.o" \
     -o "$BUILD/test_linker_utils"
 
 echo "=== building linker_block_allocator_test ==="
@@ -54,6 +57,10 @@ echo "=== building windows_tls_backend_test ==="
 g++ -std=c++17 -Wall -Wextra -Werror -pedantic -pthread \
     "-I$Q" "$Q/windows_tls_backend.cpp" "$Q/windows_tls_backend_test.cpp" \
     -o "$BUILD/test_windows_tls_backend"
+
+echo "=== building bionic_compat_test ==="
+compile "$Q/bionic_compat_test.cpp" -pthread \
+    -o "$BUILD/test_bionic_compat"
 
 echo ""
 PASS=0; FAIL=0
