@@ -15,7 +15,24 @@
  *
  */
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <errno.h>
+#ifndef SC_PAGESIZE
+#define SC_PAGESIZE 0x0027
+#endif
+#ifndef SC_PAGE_SIZE
+#define SC_PAGE_SIZE SC_PAGESIZE
+#endif
+#ifndef SC_NPROCESSORS_CONF
+#define SC_NPROCESSORS_CONF 0x0060
+#endif
+#ifndef SC_NPROCESSORS_ONLN
+#define SC_NPROCESSORS_ONLN 0x0061
+#endif
+#else
 #include <unistd.h>
+#endif
 
 /*
  * bionic/libc/include/sys/sysconf.h processed with:
@@ -621,5 +638,15 @@ MAP_TO_UNISTD(SC_LEVEL4_CACHE_LINESIZE),
 
 long _hybris_map_sysconf(int name)
 {
+#if defined(_WIN32)
+    SYSTEM_INFO info;
+    if (name == SC_PAGESIZE || name == SC_PAGE_SIZE)
+        return (GetSystemInfo(&info), (long)info.dwPageSize);
+    if (name == SC_NPROCESSORS_ONLN || name == SC_NPROCESSORS_CONF)
+        return (GetSystemInfo(&info), (long)info.dwNumberOfProcessors);
+    errno = ENOSYS;
+    return -1;
+#else
 	return sysconf(sysconf_map[name]);
+#endif
 }

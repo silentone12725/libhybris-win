@@ -18,7 +18,9 @@
 #include <unordered_map>
 #include <mutex>
 
+#if !defined(_WIN32)
 #include <dlfcn.h>
+#endif
 #include <hybris/common/dlfcn.h>
 
 #include "logging.h"

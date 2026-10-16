@@ -45,6 +45,8 @@ The project currently contains a staged portability implementation:
 - Linux regression coverage for selected Q linker units
 - Reproducible x86-64 Q-linker/core build validation and portable TLS/
   relocation regression tests
+- Native MSYS2/UCRT64 builds of both the Q linker plugin and the public
+  `libhybris-core` wrapper
 
 The validated Windows Q-linker path is functional for the covered x86-64
 fixture flow. The broader Android dynamic-linker/runtime surface is not
@@ -159,10 +161,10 @@ HYBRIS_ROOTFS=/c/path/to/android/rootfs ./build-and-test-windows.sh
 
 This validates the Windows file reader, PT_LOAD reservation/commit/protection,
 FLS-backed TLS backend, and x86-64 relocation primitives. The native Windows
-build script also compiles and links the complete Q linker plugin (`q.so`);
-the POSIX `libhybris-core` wrapper is intentionally a separate target and
-still requires additional Windows replacements for its remaining runtime
-seams.
+build script also compiles and links the complete Q linker plugin (`q.so`) and
+the public `libhybris-core` wrapper. Unsupported Linux-only wrapper facilities
+remain explicit `ENOSYS` stubs; JNI, Binder, graphics, and media providers are
+outside this target.
 
 ### Windows MSYS2/UCRT64
 

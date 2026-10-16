@@ -24,6 +24,9 @@
 #include <stdio.h>
 #include <pthread.h>
 #include <time.h>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 FILE *hybris_logging_target = NULL;
 
@@ -113,12 +116,22 @@ hybris_get_thread_id()
 double
 hybris_get_thread_time()
 {
+#if defined(_WIN32)
+    FILETIME creation, exit_time, kernel, user;
+    ULARGE_INTEGER ticks;
+    if (!GetThreadTimes(GetCurrentThread(), &creation, &exit_time, &kernel, &user))
+        return -1.0;
+    ticks.LowPart = user.dwLowDateTime;
+    ticks.HighPart = user.dwHighDateTime;
+    return (double)ticks.QuadPart / 10000000.0;
+#else
     struct timespec now;
     if(clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) == 0) {
 	return (double)now.tv_sec + (double)now.tv_nsec / 1000000000.0;
     } else {
 	return -1.0;
     }    
+#endif
 }
 
 int

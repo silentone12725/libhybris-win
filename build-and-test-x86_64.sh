@@ -116,11 +116,15 @@ fi
 
 compile_src() {
     local src="$1"
+    local extra_include="${2:-}"
     # Use md5sum of the path to avoid spaces in filenames
     local hash
     hash=$(echo "$src" | md5sum | cut -c1-8)
     local obj="$BUILD/${hash}_$(basename "$src").o"
     local -a cflags=("${CFLAGS_COMMON[@]}")
+    if [[ -n "$extra_include" ]]; then
+        cflags+=("-include" "$extra_include")
+    fi
     echo "$obj"  # return obj path via stdout; errors go to stderr
     if [[ "$src" == *.c ]]; then
         cflags=("${cflags[@]/-std=c++17/-std=gnu11}")
@@ -213,8 +217,6 @@ if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]]; then
         "/tmp/hybris-linker/q.so" "libhybris_fixture.so")
     echo ""
     echo "=== Windows Q-linker build complete ==="
-    echo "The POSIX libhybris-core wrapper is not part of this Windows Q-linker target."
-    exit 0
 fi
 
 # ── Step 2: Build libhybris-core.so (public API + hooks) ──────────────────
@@ -233,7 +235,11 @@ COMMON_SRCS=(
 COMMON_OBJS=()
 for src in "${COMMON_SRCS[@]}"; do
     echo "  CC $(basename "$src")"
-    COMMON_OBJS+=( "$(compile_src "$src")" )
+    if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]]; then
+        COMMON_OBJS+=( "$(compile_src "$src" "$COMMON/windows_core_compat.h")" )
+    else
+        COMMON_OBJS+=( "$(compile_src "$src")" )
+    fi
 done
 
 echo ""

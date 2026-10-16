@@ -51,6 +51,23 @@ typedef fpos_t fpos64_t;
 typedef int clockid_t;
 #define CLOCK_REALTIME 0
 #endif
+static inline int hybris_windows_clock_gettime(clockid_t clock_id, struct timespec *ts) {
+    FILETIME now;
+    ULARGE_INTEGER ticks;
+    if (clock_id != CLOCK_REALTIME || ts == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    GetSystemTimeAsFileTime(&now);
+    ticks.LowPart = now.dwLowDateTime;
+    ticks.HighPart = now.dwHighDateTime;
+    /* FILETIME is expressed in 100 ns intervals since 1601-01-01. */
+    ticks.QuadPart -= UINT64_C(116444736000000000);
+    ts->tv_sec = (time_t)(ticks.QuadPart / UINT64_C(10000000));
+    ts->tv_nsec = (long)((ticks.QuadPart % UINT64_C(10000000)) * 100);
+    return 0;
+}
+#define clock_gettime hybris_windows_clock_gettime
 
 #ifndef __NR_gettid
 #define __NR_gettid 0
@@ -69,6 +86,7 @@ typedef int64_t __kernel_off_t;
 #define close _close
 #define read _read
 #define write _write
+#define getpid _getpid
 #define strcasecmp _stricmp
 #define strncasecmp _strnicmp
 
