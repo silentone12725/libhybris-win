@@ -50,6 +50,11 @@ static std::mutex g_dso_handle_counters_mutex;
 
 void __hybris_add_thread_local_dtor(void* dso_handle)
 {
+#if defined(_WIN32)
+    (void)dso_handle;
+    /* The Windows core entry point does not expose POSIX Dl_info metadata. */
+    return;
+#else
     if (dso_handle == nullptr) {
         return;
     }
@@ -75,6 +80,7 @@ void __hybris_add_thread_local_dtor(void* dso_handle)
             // Nothing we can do.
         }
     }
+#endif
 }
 
 void __hybris_remove_thread_local_dtor(void* dso_handle)

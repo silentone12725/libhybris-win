@@ -86,7 +86,9 @@
 #include <netdb.h>
 #endif
 #include <unistd.h>
+#if !defined(_WIN32)
 #include <syslog.h>
+#endif
 #include <locale.h>
 #if !defined(_WIN32)
 #include <sys/syscall.h>
@@ -97,7 +99,10 @@
 #include <sys/uio.h>
 #endif
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+/* The Q linker supplies the Windows VirtualAlloc/VirtualFree shim. */
+#include <sys/mman.h>
+#else
 #include <sys/mman.h>
 #endif
 #include <libgen.h>
@@ -125,7 +130,12 @@ extern int my_property_list(void (*propfn)(const char *key, const char *value, v
 #include "wrappers.h"
 #endif
 
+#if defined(_WIN32)
+typedef void *hybris_windows_locale_t;
+static hybris_windows_locale_t hybris_locale;
+#else
 static locale_t hybris_locale;
+#endif
 static int locale_inited = 0;
 static hybris_hook_cb hook_callback = NULL;
 
@@ -204,13 +214,20 @@ void * (*_android_shared_globals)() = NULL;
  * - during debug they will be redirected to a function that traces the calls
  * - during normal execution they will be redirected to the glibc equivalent
  */
+#if defined(_WIN32)
+/* UCRT does not expose many Linux-only symbols used by the broad hook table.
+ * Unsupported direct hooks are omitted rather than binding an incompatible
+ * function pointer. Explicit Windows implementations use HOOK_TO below. */
+#define HOOK_DIRECT(symbol) {#symbol, NULL, NULL}
+#define HOOK_DIRECT_NO_DEBUG(symbol) {#symbol, NULL, NULL}
+#else
 #define HOOK_DIRECT(symbol) {#symbol, symbol, _hybris_hook_##symbol}
+#define HOOK_DIRECT_NO_DEBUG(symbol) {#symbol, symbol, symbol}
+#endif
 
 /*
  * same as above but for symbols who have no dedicated debug wrapper
  */
-#define HOOK_DIRECT_NO_DEBUG(symbol) {#symbol, symbol, symbol}
-
 /*
  * symbols that can only be hooked directly to a (symbol with a different name)
  * shall use HOOK_TO
@@ -2255,12 +2272,17 @@ FP_ATTRIB static double _hybris_hook_strtod(const char *nptr, char **endptr)
 {
     TRACE_HOOK("nptr '%s' endptr %p", nptr, endptr);
 
+#if defined(_WIN32)
+    /* UCRT has no strtod_l/newlocale pair with the POSIX locale_t ABI. */
+    return strtod(nptr, endptr);
+#else
     if (locale_inited == 0) {
             hybris_locale = newlocale(LC_ALL_MASK, "C", 0);
             locale_inited = 1;
     }
 
     return strtod_l(nptr, endptr, hybris_locale);
+#endif
 }
 
 static long int _hybris_hook_strtol(const char* str, char** endptr, int base)
@@ -2332,6 +2354,138 @@ static const void *_hybris_hook___system_property_find_nth(unsigned n)
 
     return NULL;
 }
+
+#if defined(_WIN32)
+/*
+ * These interfaces have no UCRT equivalent.  Keep their hook names visible so
+ * an Android library gets a deterministic failure instead of an unresolved
+ * call or a Windows implementation with different semantics.
+ */
+static int _hybris_hook_posix_memalign(void **memptr, size_t alignment, size_t size)
+{
+    (void)memptr;
+    (void)alignment;
+    (void)size;
+    errno = ENOSYS;
+    return -1;
+}
+
+static char *_hybris_hook_ttyname(int fd)
+{
+    (void)fd;
+    errno = ENOSYS;
+    return NULL;
+}
+
+static FILE *_hybris_hook_fmemopen(void *buffer, size_t size, const char *mode)
+{
+    (void)buffer;
+    (void)size;
+    (void)mode;
+    errno = ENOSYS;
+    return NULL;
+}
+
+static FILE *_hybris_hook_open_memstream(char **ptr, size_t *sizeloc)
+{
+    (void)ptr;
+    (void)sizeloc;
+    errno = ENOSYS;
+    return NULL;
+}
+
+static FILE *_hybris_hook_open_wmemstream(wchar_t **ptr, size_t *sizeloc)
+{
+    (void)ptr;
+    (void)sizeloc;
+    errno = ENOSYS;
+    return NULL;
+}
+
+static char *_hybris_hook_ptsname(int fd)
+{
+    (void)fd;
+    errno = ENOSYS;
+    return NULL;
+}
+
+static hybris_windows_locale_t _hybris_hook_newlocale(int category_mask,
+                                                        const char *locale,
+                                                        hybris_windows_locale_t base)
+{
+    (void)category_mask;
+    (void)locale;
+    (void)base;
+    errno = ENOSYS;
+    return NULL;
+}
+
+static void _hybris_hook_freelocale(hybris_windows_locale_t locobj)
+{
+    (void)locobj;
+    errno = ENOSYS;
+}
+
+static hybris_windows_locale_t _hybris_hook_duplocale(hybris_windows_locale_t locobj)
+{
+    (void)locobj;
+    errno = ENOSYS;
+    return NULL;
+}
+
+static hybris_windows_locale_t _hybris_hook_uselocale(hybris_windows_locale_t newloc)
+{
+    (void)newloc;
+    errno = ENOSYS;
+    return NULL;
+}
+
+static void *_hybris_hook_mmap64(void *addr, size_t len, int prot,
+                                 int flags, int fd, off64_t offset)
+{
+    (void)addr;
+    (void)len;
+    (void)prot;
+    (void)flags;
+    (void)fd;
+    (void)offset;
+    errno = ENOSYS;
+    return (void *)-1;
+}
+
+static int _hybris_hook_clone(int (*fn)(void *), void *child_stack,
+                              int flags, void *arg, ...)
+{
+    (void)fn;
+    (void)child_stack;
+    (void)flags;
+    (void)arg;
+    errno = ENOSYS;
+    return -1;
+}
+
+static void *_hybris_hook_getpwuid(unsigned long uid)
+{
+    (void)uid;
+    errno = ENOSYS;
+    return NULL;
+}
+
+static void *_hybris_hook_getpwnam(const char *name)
+{
+    (void)name;
+    errno = ENOSYS;
+    return NULL;
+}
+
+static int _hybris_hook_pthread_setschedprio(pthread_t thread, int priority)
+{
+    (void)thread;
+    (void)priority;
+    errno = ENOSYS;
+    return -1;
+}
+#endif
 
 /**
  * NOTE: Normally we don't have to wrap __system_property_get (libc.so) as it is only used
@@ -2599,12 +2753,14 @@ static int _hybris_hook_mprotect(void *addr, size_t len, int prot)
     return mprotect(addr, len, prot);
 }
 
+#if !defined(_WIN32)
 static int _hybris_hook_posix_memalign(void **memptr, size_t alignment, size_t size)
 {
     TRACE_HOOK("memptr %p alignment %zu size %zu", memptr, alignment, size);
 
     return posix_memalign(memptr, alignment, size);
 }
+#endif
 
 static pid_t _hybris_hook_fork(void)
 {
@@ -2613,6 +2769,7 @@ static pid_t _hybris_hook_fork(void)
     return fork();
 }
 
+#if !defined(_WIN32)
 static locale_t _hybris_hook_newlocale(int category_mask, const char *locale, locale_t base)
 {
     TRACE_HOOK("category mask %i locale '%s'", category_mask, locale);
@@ -2640,6 +2797,7 @@ static locale_t _hybris_hook_uselocale(locale_t newloc)
 
     return uselocale(newloc);
 }
+#endif
 
 static struct lconv* _hybris_hook_localeconv(void)
 {
@@ -2664,6 +2822,7 @@ static void* _hybris_hook_mmap(void *addr, size_t len, int prot,
     return mmap(addr, len, prot, flags, fd, offset);
 }
 
+#if !defined(_WIN32)
 static void* _hybris_hook_mmap64(void *addr, size_t len, int prot,
                   int flags, int fd, off64_t offset)
 {
@@ -2672,6 +2831,7 @@ static void* _hybris_hook_mmap64(void *addr, size_t len, int prot,
 
     return mmap64(addr, len, prot, flags, fd, offset);
 }
+#endif
 
 static int _hybris_hook_munmap(void *addr, size_t length)
 {
@@ -3074,7 +3234,9 @@ static struct _hook hooks_common[] = {
     HOOK_DIRECT_NO_DEBUG(strsep),
     HOOK_DIRECT_NO_DEBUG(strspn),
     HOOK_DIRECT_NO_DEBUG(strsignal),
-    HOOK_DIRECT_NO_DEBUG(getgrnam),
+#if !defined(_WIN32)
+     HOOK_DIRECT_NO_DEBUG(getgrnam),
+#endif
     HOOK_DIRECT_NO_DEBUG(strcoll),
     HOOK_DIRECT_NO_DEBUG(strxfrm),
     /* strings.h */
@@ -3082,11 +3244,15 @@ static struct _hook hooks_common[] = {
     HOOK_DIRECT_NO_DEBUG(bcopy),
     HOOK_DIRECT_NO_DEBUG(bzero),
     HOOK_DIRECT_NO_DEBUG(ffs),
-    HOOK_INDIRECT(__sprintf_chk),
-    HOOK_INDIRECT(__snprintf_chk),
-    /* pthread.h */
-    HOOK_DIRECT_NO_DEBUG(getauxval),
-    HOOK_INDIRECT(gettid),
+     HOOK_INDIRECT(__sprintf_chk),
+     HOOK_INDIRECT(__snprintf_chk),
+     /* pthread.h */
+#if defined(_WIN32)
+     HOOK_TO(getauxval, hybris_windows_getauxval),
+#else
+     HOOK_DIRECT_NO_DEBUG(getauxval),
+#endif
+     HOOK_INDIRECT(gettid),
     HOOK_DIRECT_NO_DEBUG(getpid),
     HOOK_DIRECT_NO_DEBUG(pthread_atfork),
     HOOK_INDIRECT(pthread_create),
@@ -3301,9 +3467,11 @@ static struct _hook hooks_common[] = {
     HOOK_DIRECT_NO_DEBUG(abort),
     HOOK_DIRECT_NO_DEBUG(writev),
     /* unistd.h */
-    HOOK_DIRECT_NO_DEBUG(access),
-    /* grp.h */
-    HOOK_DIRECT_NO_DEBUG(getgrgid),
+     HOOK_DIRECT_NO_DEBUG(access),
+     /* grp.h */
+#if !defined(_WIN32)
+     HOOK_DIRECT_NO_DEBUG(getgrgid),
+#endif
     /* C++ ABI */
     HOOK_DIRECT_NO_DEBUG(__cxa_atexit),
     HOOK_DIRECT_NO_DEBUG(__cxa_finalize),
@@ -3333,19 +3501,34 @@ static struct _hook hooks_mm[] = {
     HOOK_DIRECT_NO_DEBUG(dprintf),
     HOOK_DIRECT_NO_DEBUG(mallinfo),
     HOOK_DIRECT(malloc_usable_size),
-    HOOK_DIRECT(posix_memalign),
+#if defined(_WIN32)
+     HOOK_TO(posix_memalign, _hybris_hook_posix_memalign),
+#else
+     HOOK_DIRECT(posix_memalign),
+#endif
     HOOK_DIRECT(mprotect),
     HOOK_TO(__gnu_strerror_r, _hybris_hook__gnu_strerror_r),
     HOOK_INDIRECT(pthread_rwlockattr_getkind_np),
     HOOK_INDIRECT(pthread_rwlockattr_setkind_np),
     /* unistd.h */
     HOOK_DIRECT(fork),
-    HOOK_DIRECT_NO_DEBUG(ttyname),
+#if defined(_WIN32)
+     HOOK_TO(ttyname, _hybris_hook_ttyname),
+#else
+     HOOK_DIRECT_NO_DEBUG(ttyname),
+#endif
     HOOK_DIRECT_NO_DEBUG(swprintf),
-    HOOK_DIRECT_NO_DEBUG(fmemopen),
-    HOOK_DIRECT_NO_DEBUG(open_memstream),
-    HOOK_DIRECT_NO_DEBUG(open_wmemstream),
-    HOOK_DIRECT_NO_DEBUG(ptsname),
+#if defined(_WIN32)
+     HOOK_TO(fmemopen, _hybris_hook_fmemopen),
+     HOOK_TO(open_memstream, _hybris_hook_open_memstream),
+     HOOK_TO(open_wmemstream, _hybris_hook_open_wmemstream),
+     HOOK_TO(ptsname, _hybris_hook_ptsname),
+#else
+     HOOK_DIRECT_NO_DEBUG(fmemopen),
+     HOOK_DIRECT_NO_DEBUG(open_memstream),
+     HOOK_DIRECT_NO_DEBUG(open_wmemstream),
+     HOOK_DIRECT_NO_DEBUG(ptsname),
+#endif
     HOOK_TO(__hybris_set_errno_internal, _hybris_hook___set_errno),
     HOOK_DIRECT_NO_DEBUG(getservbyname),
     HOOK_DIRECT_NO_DEBUG(close), /* avoid calling fdsan functions */
@@ -3353,10 +3536,17 @@ static struct _hook hooks_mm[] = {
     HOOK_INDIRECT(basename),
     HOOK_INDIRECT(dirname),
     /* locale.h */
-    HOOK_DIRECT(newlocale),
-    HOOK_DIRECT(freelocale),
-    HOOK_DIRECT(duplocale),
-    HOOK_DIRECT(uselocale),
+#if defined(_WIN32)
+     HOOK_TO(newlocale, _hybris_hook_newlocale),
+     HOOK_TO(freelocale, _hybris_hook_freelocale),
+     HOOK_TO(duplocale, _hybris_hook_duplocale),
+     HOOK_TO(uselocale, _hybris_hook_uselocale),
+#else
+     HOOK_DIRECT(newlocale),
+     HOOK_DIRECT(freelocale),
+     HOOK_DIRECT(duplocale),
+     HOOK_DIRECT(uselocale),
+#endif
     HOOK_DIRECT(localeconv),
     HOOK_DIRECT(setlocale),
     /* sys/mman.h */
@@ -3365,7 +3555,11 @@ static struct _hook hooks_mm[] = {
 #else
     HOOK_INDIRECT(mmap),
 #endif
-    HOOK_DIRECT(mmap64),
+#if defined(_WIN32)
+     HOOK_TO(mmap64, _hybris_hook_mmap64),
+#else
+     HOOK_DIRECT(mmap64),
+#endif
     HOOK_DIRECT(munmap),
     /* wchar.h */
     HOOK_DIRECT_NO_DEBUG(wmemchr),
@@ -3383,7 +3577,11 @@ static struct _hook hooks_mm[] = {
     HOOK_INDIRECT(fgetwc),
     HOOK_INDIRECT(getwc),
     /* sched.h */
-    HOOK_DIRECT_NO_DEBUG(clone),
+#if defined(_WIN32)
+     HOOK_TO(clone, _hybris_hook_clone),
+#else
+     HOOK_DIRECT_NO_DEBUG(clone),
+#endif
     /* mntent.h */
     HOOK_DIRECT(setmntent),
     HOOK_INDIRECT(getmntent),
@@ -3392,8 +3590,13 @@ static struct _hook hooks_mm[] = {
     /* stdlib.h */
     HOOK_DIRECT_NO_DEBUG(system),
     /* pwd.h */
-    HOOK_DIRECT_NO_DEBUG(getpwuid),
-    HOOK_DIRECT_NO_DEBUG(getpwnam),
+#if defined(_WIN32)
+     HOOK_TO(getpwuid, _hybris_hook_getpwuid),
+     HOOK_TO(getpwnam, _hybris_hook_getpwnam),
+#else
+     HOOK_DIRECT_NO_DEBUG(getpwuid),
+     HOOK_DIRECT_NO_DEBUG(getpwnam),
+#endif
     /* signal.h */
     /* Hooks commented out for the moment as we need proper translations between
      * bionic and glibc types for them to work (for instance, sigset_t has
@@ -3459,7 +3662,11 @@ static struct _hook hooks_p[] = {
     HOOK_INDIRECT(android_fdsan_exchange_owner_tag),
     HOOK_INDIRECT(android_fdsan_close_with_tag),
     /* pthread.h */
-    HOOK_DIRECT_NO_DEBUG(pthread_setschedprio),
+#if defined(_WIN32)
+     HOOK_TO(pthread_setschedprio, _hybris_hook_pthread_setschedprio),
+#else
+     HOOK_DIRECT_NO_DEBUG(pthread_setschedprio),
+#endif
 };
 
 static int hook_cmp(const void *a, const void *b)
@@ -3708,9 +3915,15 @@ static void __hybris_linker_init()
     const char *linker_dir = LINKER_PLUGIN_DIR;
     /* getauxval to make sure users cannot load custom libraries into
      * setuid processes */
+#if defined(_WIN32)
+    /* Windows has no AT_SECURE process state.  Do not treat the ENOSYS
+     * getauxval compatibility shim as proof that the override is safe. */
+    const char *user_linker_dir = NULL;
+#else
     const char *user_linker_dir = getauxval(AT_SECURE) ?
 	    NULL :
 	    getenv("HYBRIS_LINKER_DIR");
+#endif
     if (user_linker_dir)
         linker_dir = user_linker_dir;
 

@@ -49,10 +49,11 @@ The project currently contains a staged portability implementation:
   `libhybris-core` wrapper
 
 The validated Windows Q-linker path is functional for the covered x86-64
-fixture flow. The broader Android dynamic-linker/runtime surface is not
-complete: the full Q translation-unit boundary still depends on
-POSIX/Bionic memory, allocator, lock, and diagnostics headers, and arbitrary
-exported Android calls still require a typed ABI signature.
+fixture flow. The native Windows build also now produces the public
+`libhybris-core` wrapper and its smoke host. The broader Android
+dynamic-linker/runtime surface is not complete: unsupported POSIX facilities
+remain explicit `ENOSYS` paths, and arbitrary exported Android calls still
+require a typed ABI signature.
 
 JNI, Binder, graphics, media, Android properties, and other framework services
 require external providers. This repository does not contain those providers
@@ -161,11 +162,11 @@ HYBRIS_ROOTFS=/c/path/to/android/rootfs ./build-and-test-windows.sh
 
 This validates the Windows file reader, PT_LOAD reservation/commit/protection,
 FLS-backed TLS backend, and x86-64 relocation primitives. The native Windows
-build script compiles and links the complete Q linker plugin (`q.so`); the
-public `libhybris-core` wrapper has a first portability layer, but its full
-MSYS2/UCRT64 build is still blocked by remaining Linux-only hook declarations.
-Unsupported wrapper facilities remain explicit `ENOSYS` stubs; JNI, Binder,
-graphics, and media providers are outside this target.
+build script compiles and links both the complete Q linker plugin (`q.so`) and
+the public `libhybris-core` wrapper. The core smoke host is built; its Android
+`dlopen` run requires an Android x86-64 rootfs. Unsupported wrapper facilities
+remain explicit `ENOSYS` stubs; JNI, Binder, graphics, and media providers are
+outside this target.
 
 ### Windows MSYS2/UCRT64
 

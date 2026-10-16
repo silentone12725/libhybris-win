@@ -232,6 +232,11 @@ COMMON_SRCS=(
     "$COMMON/legacy_properties/properties.c"
     "$COMMON/legacy_properties/cache.c"
 )
+if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]]; then
+    COMMON_SRCS[0]="$COMMON/windows_core_hooks.c"
+    COMMON_SRCS[6]="$COMMON/windows_core_properties.c"
+    unset 'COMMON_SRCS[7]'
+fi
 COMMON_OBJS=()
 for src in "${COMMON_SRCS[@]}"; do
     echo "  CC $(basename "$src")"
@@ -255,8 +260,12 @@ echo "=== Building dlopen smoke test ==="
 cat > "$BUILD/test_hybris_dlopen.cpp" << 'TESTEOF'
 #include <stdio.h>
 #include <stdlib.h>
+#if defined(_WIN32)
+#include "windows_core_compat.h"
+#else
 #include <dlfcn.h>
 #include <unistd.h>
+#endif
 
 // hybris public API
 extern "C" {
@@ -338,10 +347,14 @@ int main() {
 }
 TESTEOF
 
+CORE_LINK_ARG="-lhybris-core"
+if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]]; then
+    CORE_LINK_ARG="$BUILD/libhybris-core.so"
+fi
 g++ -std=c++17 \
     "-I$INC" "-I$COMMON" "-I$BUILD/stub" \
     "$BUILD/test_hybris_dlopen.cpp" \
-    "-L$BUILD" -lhybris-core \
+    "-L$BUILD" "$CORE_LINK_ARG" \
     "${LINK_LIBS[@]}" \
     "-Wl,-rpath,$BUILD" \
     -o "$BUILD/test_hybris_dlopen"
