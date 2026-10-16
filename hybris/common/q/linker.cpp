@@ -3128,6 +3128,7 @@ bool soinfo::relocate(const VersionTracker& version_tracker, ElfRelIteratorT&& r
       // is a reference to the current module.
       if (is_tls_reloc(type)) {
         lsi = this;
+        sym_name = "<current module>";
       }
     } else if (ELF_ST_BIND(symtab_[sym].st_info) == STB_LOCAL && is_tls_reloc(type)) {
       // In certain situations, the Gold linker accesses a TLS symbol using a

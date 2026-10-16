@@ -167,9 +167,15 @@ HYBRIS_ROOTFS=/c/path/to/android/rootfs ./build-and-test-windows.sh
 This validates the Windows file reader, PT_LOAD reservation/commit/protection,
 FLS-backed TLS backend, and x86-64 relocation primitives. The native Windows
 build script compiles and links both the complete Q linker plugin (`q.so`) and
-the public `libhybris-core` wrapper. The core smoke host is built; its Android
-`dlopen` run requires an Android x86-64 rootfs. Unsupported wrapper facilities
-remain explicit `ENOSYS` stubs; JNI, Binder, graphics, and media providers are
+the public `libhybris-core` wrapper. The Linux x86-64 script loads the real
+Android rootfs libraries. On native Windows, the core smoke host defaults to
+the bundled Android fixture because Android `libc.so` is an initial image with
+initial-exec TLS relocations, while the Windows backend currently provides
+FLS-backed dynamic TLS. The Windows script still validates the real rootfs
+`libc.so` with its ELF reader. Set
+`HYBRIS_WINDOWS_CORE_SMOKE_REAL_ANDROID=1` only when explicitly testing that
+unsupported initial-image TLS case. Unsupported wrapper facilities remain
+explicit `ENOSYS` stubs; JNI, Binder, graphics, and media providers are
 outside this target.
 
 ### Windows MSYS2/UCRT64

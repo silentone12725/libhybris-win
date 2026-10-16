@@ -383,8 +383,26 @@ else
     echo ""
     echo "=== Running dlopen smoke test ==="
     mkdir -p /tmp/hybris-linker
-    HYBRIS_ROOTFS="$HYBRIS_ROOTFS" \
-        HYBRIS_LD_LIBRARY_PATH="$HYBRIS_ROOTFS" \
+    SMOKE_ROOTFS="$HYBRIS_ROOTFS"
+    SMOKE_LIBRARY="${HYBRIS_SMOKE_LIBRARY:-}"
+    SMOKE_SYMBOL="${HYBRIS_SMOKE_SYMBOL:-}"
+    if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]] &&
+       [[ "${HYBRIS_WINDOWS_CORE_SMOKE_REAL_ANDROID:-0}" != "1" ]]; then
+        # Android's libc is an initial image on Android and contains
+        # thread-pointer-relative initial-exec TLS relocations. Windows Q
+        # currently provides dynamic FLS-backed TLS, so loading libc as a
+        # normal DLL would be unsound. Keep the native core smoke focused on
+        # the supported dynamic-TLS path; the real Android rootfs is still
+        # exercised by the Linux smoke and Windows ELF-reader tests.
+        SMOKE_ROOTFS="$(cygpath -m "$BUILD/android-fixture")"
+        SMOKE_LIBRARY="$SMOKE_ROOTFS/libhybris_fixture.so"
+        SMOKE_SYMBOL="hybris_fixture_constructor_ran"
+        echo "[info] Windows core smoke uses the Android fixture (dynamic TLS)"
+    fi
+    HYBRIS_ROOTFS="$SMOKE_ROOTFS" \
+        HYBRIS_LD_LIBRARY_PATH="$SMOKE_ROOTFS" \
         HYBRIS_LINKER_DIR="$HYBRIS_LINKER_DIR" \
+        HYBRIS_SMOKE_LIBRARY="$SMOKE_LIBRARY" \
+        HYBRIS_SMOKE_SYMBOL="$SMOKE_SYMBOL" \
         "$BUILD/test_hybris_dlopen"
 fi
