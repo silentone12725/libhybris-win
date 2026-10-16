@@ -21,6 +21,7 @@ enum {
     R_DTPOFF64 = 17,
     R_TPOFF64 = 18,
     R_DTPOFF32 = 21,
+    R_GOTTPOFF = 22,
     R_TPOFF32 = 23,
     R_PC64 = 24,
     R_GOTPCREL = 9,
@@ -151,11 +152,24 @@ int main(void) {
     expect("TLS static 32-bit offset", result == Q_RELOC_OK &&
            read_u32(image + 84) == (uint32_t)-0x1d0);
 
-    rel = (q_x86_64_relocation){R_32S, vaddr + 88, 1};
+    rel = (q_x86_64_relocation){R_GOTTPOFF, vaddr + 88, 4};
+    result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, &symbol);
+    expect("TLS initial-exec GOT offset", result == Q_RELOC_OK &&
+           read_u32(image + 88) == (uint32_t)-0x1cc);
+
+    memcpy(before, image, sizeof(image));
+    rel = (q_x86_64_relocation){R_GOTTPOFF, vaddr + 116, 0};
+    symbol.value = 0;
+    symbol.static_tls_offset = UINT64_C(0x100000000);
+    result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, &symbol);
+    expect("TLS initial-exec GOT overflow", result == Q_RELOC_OUT_OF_RANGE &&
+           memcmp(before, image, sizeof(image)) == 0);
+
+    rel = (q_x86_64_relocation){R_32S, vaddr + 92, 1};
     symbol.value = (uint64_t)-2;
     result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, &symbol);
     expect("signed 32-bit relocation", result == Q_RELOC_OK &&
-           read_u32(image + 88) == 0xffffffffU);
+           read_u32(image + 92) == 0xffffffffU);
 
     rel = (q_x86_64_relocation){R_NONE, vaddr + sizeof(image) + 1, 0};
     result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, NULL);
@@ -169,14 +183,14 @@ int main(void) {
            memcmp(before, image, sizeof(image)) == 0);
 
     memcpy(before, image, sizeof(image));
-    rel = (q_x86_64_relocation){R_16, vaddr + 92, 0};
+    rel = (q_x86_64_relocation){R_16, vaddr + 96, 0};
     symbol.value = 0x10000;
     result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, &symbol);
     expect("16-bit overflow", result == Q_RELOC_OUT_OF_RANGE &&
            memcmp(before, image, sizeof(image)) == 0);
 
     memcpy(before, image, sizeof(image));
-    rel = (q_x86_64_relocation){R_PC16, vaddr + 94, 0};
+    rel = (q_x86_64_relocation){R_PC16, vaddr + 98, 0};
     symbol.value = (uint64_t)(uintptr_t)(image + 94) + 0x10000;
     result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, &symbol);
     expect("PC-relative 16-bit overflow", result == Q_RELOC_OUT_OF_RANGE &&
@@ -185,21 +199,21 @@ int main(void) {
     rel = (q_x86_64_relocation){R_64, vaddr + 124, 0};
     result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, &symbol);
     expect("bounds check", result == Q_RELOC_OUT_OF_BOUNDS);
-    rel = (q_x86_64_relocation){R_GOTPCREL, vaddr + 96, 4};
-    symbol.value = (uint64_t)(uintptr_t)(image + 96) + 0x200;
+    rel = (q_x86_64_relocation){R_GOTPCREL, vaddr + 104, 4};
+    symbol.value = (uint64_t)(uintptr_t)(image + 104) + 0x200;
     result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, &symbol);
     expect("GOTPCREL relocation", result == Q_RELOC_OK &&
-           read_u32(image + 96) == 0x204);
-    rel = (q_x86_64_relocation){R_GOTPCRELX, vaddr + 100, 0};
-    symbol.value = (uint64_t)(uintptr_t)(image + 100) - 0x80;
+           read_u32(image + 104) == 0x204);
+    rel = (q_x86_64_relocation){R_GOTPCRELX, vaddr + 108, 0};
+    symbol.value = (uint64_t)(uintptr_t)(image + 108) - 0x80;
     result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, &symbol);
     expect("GOTPCRELX relocation", result == Q_RELOC_OK &&
-           read_u32(image + 100) == (uint32_t)-0x80);
-    rel = (q_x86_64_relocation){R_REX_GOTPCRELX, vaddr + 104, 0};
-    symbol.value = (uint64_t)(uintptr_t)(image + 104) + 0x40;
+           read_u32(image + 108) == (uint32_t)-0x80);
+    rel = (q_x86_64_relocation){R_REX_GOTPCRELX, vaddr + 112, 0};
+    symbol.value = (uint64_t)(uintptr_t)(image + 112) + 0x40;
     result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, &symbol);
     expect("REX_GOTPCRELX relocation", result == Q_RELOC_OK &&
-           read_u32(image + 104) == 0x40);
+           read_u32(image + 112) == 0x40);
 
     printf("RESULT: %s failures=%d\n", failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;

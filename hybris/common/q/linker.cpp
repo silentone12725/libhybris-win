@@ -3085,6 +3085,9 @@ static bool is_tls_reloc(ElfW(Word) type) {
     case R_GENERIC_TLS_DTPMOD:
     case R_GENERIC_TLS_DTPREL:
     case R_GENERIC_TLS_TPREL:
+#if defined(__x86_64__)
+    case R_X86_64_GOTTPOFF:
+#endif
     case R_GENERIC_TLSDESC:
       return true;
     default:
@@ -3207,6 +3210,9 @@ bool soinfo::relocate(const VersionTracker& version_tracker, ElfRelIteratorT&& r
           case R_GENERIC_TLS_DTPMOD:
           case R_GENERIC_TLS_DTPREL:
           case R_GENERIC_TLS_TPREL:
+#if defined(__x86_64__)
+          case R_X86_64_GOTTPOFF:
+#endif
           case R_GENERIC_TLSDESC:
 #if defined(__aarch64__)
           case R_AARCH64_ABS64:
@@ -3367,6 +3373,9 @@ bool soinfo::relocate(const VersionTracker& version_tracker, ElfRelIteratorT&& r
         }
         break;
       case R_GENERIC_TLS_TPREL:
+#if defined(__x86_64__)
+      case R_X86_64_GOTTPOFF:
+#endif
         count_relocation(kRelocRelative);
         MARK(rel->r_offset);
         {
@@ -3389,7 +3398,21 @@ bool soinfo::relocate(const VersionTracker& version_tracker, ElfRelIteratorT&& r
           TRACE_TYPE(RELO, "RELO TLS_TPREL %16p <- %16p %s\n",
                      reinterpret_cast<void*>(reloc),
                      reinterpret_cast<void*>(tpoff), sym_name);
-          *reinterpret_cast<ElfW(Addr)*>(reloc) = tpoff;
+#if defined(__x86_64__)
+          if (type == R_X86_64_GOTTPOFF) {
+            const uint64_t tpoff_value = static_cast<uint64_t>(tpoff);
+            if (tpoff_value > static_cast<uint64_t>(INT32_MAX) &&
+                tpoff_value < static_cast<uint64_t>(INT32_MIN)) {
+              DL_ERR("TLS symbol \"%s\" in \"%s\" has GOTTPOFF value out of range",
+                     sym_name, get_realpath());
+              return false;
+            }
+            *reinterpret_cast<uint32_t*>(reloc) = static_cast<uint32_t>(tpoff_value);
+          } else
+#endif
+          {
+            *reinterpret_cast<ElfW(Addr)*>(reloc) = tpoff;
+          }
         }
         break;
 

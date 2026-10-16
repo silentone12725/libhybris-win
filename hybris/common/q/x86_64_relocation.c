@@ -46,6 +46,7 @@ q_x86_64_reloc_result q_x86_64_apply_relocation(
         case Q_R_X86_64_32:
         case Q_R_X86_64_32S:
         case Q_R_X86_64_DTPOFF32:
+        case Q_R_X86_64_GOTTPOFF:
         case Q_R_X86_64_TPOFF32:
             width = 4;
             break;
@@ -84,6 +85,7 @@ q_x86_64_reloc_result q_x86_64_apply_relocation(
                 value = addend_modulo(symbol->value, rel->addend);
                 break;
             case Q_R_X86_64_TPOFF64:
+            case Q_R_X86_64_GOTTPOFF:
             case Q_R_X86_64_TPOFF32:
                 if (!symbol->has_static_tls) return Q_RELOC_NO_STATIC_TLS;
                 value = addend_modulo(symbol->static_tls_offset + symbol->value,
@@ -114,6 +116,7 @@ q_x86_64_reloc_result q_x86_64_apply_relocation(
     } else if (rel->type == Q_R_X86_64_32 && value > UINT32_MAX) {
         return Q_RELOC_OUT_OF_RANGE;
     } else if ((rel->type == Q_R_X86_64_32S ||
+                rel->type == Q_R_X86_64_GOTTPOFF ||
                 rel->type == Q_R_X86_64_TPOFF32) &&
                !fits_signed(value, 32)) {
         return Q_RELOC_OUT_OF_RANGE;

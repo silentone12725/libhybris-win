@@ -49,6 +49,12 @@ echo "=== building linker_sleb128_test ==="
 compile "$Q/linker_sleb128_test.cpp" "$Q/linker_test_globals.cpp" \
     -o "$BUILD/test_sleb128"
 
+echo "=== building packed_reloc_test ==="
+cc -std=c11 -Wall -Wextra -Werror -pedantic -I"$Q" -c \
+    "$Q/x86_64_relocation.c" -o "$BUILD/x86_64_relocation.o"
+compile "$Q/packed_reloc_test.cpp" "$BUILD/x86_64_relocation.o" \
+    -o "$BUILD/test_packed_reloc"
+
 echo "=== building x86_64_relocation_test ==="
 compile_c "$Q/x86_64_relocation.c" "$Q/x86_64_relocation_test.c" \
     -o "$BUILD/test_x86_64_relocation"
