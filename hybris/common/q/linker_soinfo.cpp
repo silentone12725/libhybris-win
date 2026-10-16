@@ -403,7 +403,12 @@ static void call_function(const char* function_name __attribute__((__unused__)),
   }
 
   TRACE("[ Calling d-tor %s @ %p for '%s' ]", function_name, function, realpath);
+#if defined(_WIN32) && (defined(__GNUC__) || defined(__clang__))
+  typedef void (*win_sysv_dtor)(void) __attribute__((sysv_abi));
+  reinterpret_cast<win_sysv_dtor>(function)();
+#else
   (void)hybris_abi_call_sysv_dtor(reinterpret_cast<hybris_abi_sysv_dtor_fn>(function));
+#endif
   TRACE("[ Done calling d-tor %s @ %p for '%s' ]", function_name, function, realpath);
 }
 

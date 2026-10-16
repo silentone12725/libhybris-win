@@ -43,9 +43,14 @@ ElfW(Addr) __bionic_call_ifunc_resolver(ElfW(Addr) resolver_addr) {
   static unsigned long hwcap = getauxval(AT_HWCAP);
   return reinterpret_cast<ifunc_resolver_t>(resolver_addr)(hwcap);
 #else
+#if defined(_WIN32) && (defined(__GNUC__) || defined(__clang__))
+  typedef uintptr_t (*win_sysv_ifunc_resolver)(void) __attribute__((sysv_abi));
+  return reinterpret_cast<win_sysv_ifunc_resolver>(resolver_addr)();
+#else
   uintptr_t result = 0;
   const hybris_abi_status status = hybris_abi_call_sysv_ifunc0(
       reinterpret_cast<hybris_abi_sysv_ifunc0_fn>(resolver_addr), &result);
   return status == HYBRIS_ABI_STATUS_OK ? static_cast<ElfW(Addr)>(result) : 0;
+#endif
 #endif
 }
