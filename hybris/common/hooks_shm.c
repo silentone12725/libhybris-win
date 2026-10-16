@@ -25,13 +25,29 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#if !defined(_WIN32)
 #include <sys/stat.h>
+#endif
 #include <fcntl.h>
 #include <pthread.h>
 #include <errno.h>
+#if !defined(_WIN32)
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/mman.h>
+#endif
+
+#if defined(_WIN32)
+
+int hybris_is_pointer_in_shm(void *ptr) { (void)ptr; return 0; }
+void *hybris_get_shmpointer(hybris_shm_pointer_t handle) {
+    (void)handle; errno = ENOSYS; return NULL;
+}
+hybris_shm_pointer_t hybris_shm_alloc(size_t size) {
+    (void)size; errno = ENOSYS; return 0;
+}
+
+#else
 
 /* Debug */
 #include "logging.h"
@@ -258,3 +274,5 @@ hybris_shm_pointer_t hybris_shm_alloc(size_t size)
 
     return location;
 }
+
+#endif

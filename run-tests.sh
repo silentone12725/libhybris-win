@@ -28,7 +28,7 @@ compile() {
 
 compile_c() {
     cc -std=c11 -Wall -Wextra -Werror -pedantic \
-        "-I$Q" "$@"
+        "-I$Q" "-I$ROOT/hybris/include" "$@"
 }
 
 echo "=== building linked_list_test ==="
@@ -57,6 +57,10 @@ echo "=== building windows_tls_backend_test ==="
 g++ -std=c++17 -Wall -Wextra -Werror -pedantic -pthread \
     "-I$Q" "$Q/windows_tls_backend.cpp" "$Q/windows_tls_backend_test.cpp" \
     -o "$BUILD/test_windows_tls_backend"
+
+echo "=== building abi_thunks_test ==="
+compile_c "$ROOT/hybris/common/abi_thunks.c" "$ROOT/hybris/tests/test_abi_thunks.c" \
+    -lm -o "$BUILD/test_abi_thunks"
 
 echo "=== building bionic_compat_test ==="
 compile "$Q/bionic_compat_test.cpp" -pthread \

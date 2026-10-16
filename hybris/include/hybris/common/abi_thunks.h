@@ -37,6 +37,8 @@ typedef enum hybris_abi_signature {
     HYBRIS_ABI_SIGNATURE_MIXED_I64 = 2,
     HYBRIS_ABI_SIGNATURE_PAIR_U64 = 3,
     HYBRIS_ABI_SIGNATURE_CALLBACK_I32 = 4,
+    HYBRIS_ABI_SIGNATURE_FLOAT64 = 5,
+    HYBRIS_ABI_SIGNATURE_FLOAT_PAIR = 6,
     HYBRIS_ABI_SIGNATURE_VARIADIC = 0x100,
     HYBRIS_ABI_SIGNATURE_UNKNOWN = -1
 } hybris_abi_signature;
@@ -53,6 +55,14 @@ typedef struct hybris_abi_pair_u64 {
     uint64_t lo;
     uint64_t hi;
 } hybris_abi_pair_u64;
+
+/* A deliberately mixed floating-point aggregate: its layout and return
+ * convention must remain part of the typed signature, never inferred from an
+ * untyped Android export. */
+typedef struct hybris_abi_float_pair {
+    double first;
+    float second;
+} hybris_abi_float_pair;
 
 /* Every function-pointer type carries the ABI of its target explicitly. */
 typedef int64_t (HYBRIS_ABI_SYSV *hybris_abi_sysv_i64_fn)(int64_t, int64_t);
@@ -72,6 +82,14 @@ typedef int32_t (HYBRIS_ABI_SYSV *hybris_abi_sysv_callback_i32_fn)(
     int32_t, double);
 typedef int32_t (HYBRIS_ABI_MS *hybris_abi_ms_callback_i32_fn)(
     int32_t, double);
+
+typedef double (HYBRIS_ABI_SYSV *hybris_abi_sysv_float64_fn)(double, float);
+typedef double (HYBRIS_ABI_MS *hybris_abi_ms_float64_fn)(double, float);
+
+typedef hybris_abi_float_pair (HYBRIS_ABI_SYSV *hybris_abi_sysv_float_pair_fn)(
+    hybris_abi_float_pair, double);
+typedef hybris_abi_float_pair (HYBRIS_ABI_MS *hybris_abi_ms_float_pair_fn)(
+    hybris_abi_float_pair, double);
 
 /* ELF lifecycle entry points use the SysV ABI on the Windows host. */
 typedef void (HYBRIS_ABI_SYSV *hybris_abi_sysv_ctor_fn)(int, char **, char **);
@@ -99,6 +117,11 @@ hybris_abi_status HYBRIS_ABI_SYSV hybris_abi_call_ms_pair_u64(
 hybris_abi_status HYBRIS_ABI_SYSV hybris_abi_call_ms_callback_i32(
     hybris_abi_ms_callback_i32_fn callback, int32_t value, double factor,
     int32_t *result);
+hybris_abi_status HYBRIS_ABI_SYSV hybris_abi_call_ms_float64(
+    hybris_abi_ms_float64_fn function, double value, float factor, double *result);
+hybris_abi_status HYBRIS_ABI_SYSV hybris_abi_call_ms_float_pair(
+    hybris_abi_ms_float_pair_fn function, hybris_abi_float_pair value, double offset,
+    hybris_abi_float_pair *result);
 
 /* A Microsoft-ABI caller invoking a SysV target. */
 hybris_abi_status HYBRIS_ABI_MS hybris_abi_call_sysv_i64(
@@ -112,6 +135,14 @@ hybris_abi_status HYBRIS_ABI_MS hybris_abi_call_sysv_pair_u64(
 hybris_abi_status HYBRIS_ABI_MS hybris_abi_call_sysv_callback_i32(
     hybris_abi_sysv_callback_i32_fn callback, int32_t value, double factor,
     int32_t *result);
+hybris_abi_status HYBRIS_ABI_MS hybris_abi_call_sysv_float64(
+    hybris_abi_sysv_float64_fn function, double value, float factor, double *result);
+hybris_abi_status HYBRIS_ABI_MS hybris_abi_call_sysv_float_pair(
+    hybris_abi_sysv_float_pair_fn function, hybris_abi_float_pair value, double offset,
+    hybris_abi_float_pair *result);
+
+/* ELF lifecycle tables use both null and the all-bits-one sentinel. */
+hybris_abi_status hybris_abi_validate_function_address(uintptr_t address);
 
 #ifdef __cplusplus
 } /* extern "C" */

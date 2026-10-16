@@ -23,20 +23,34 @@
 
 #include "hooks_shm.h"
 
+#if defined(_WIN32)
+#include "windows_core_compat.h"
+#endif
+
 #include <stdio.h>
 #include <stdarg.h>
+#if !defined(_WIN32)
 #include <stdio_ext.h>
+#endif
 #include <stddef.h>
 #include <stdlib.h>
 #include <limits.h>
 #include <malloc.h>
 #include <string.h>
 #include <inttypes.h>
+#if !defined(_WIN32)
 #include <strings.h>
+#endif
+#if !defined(_WIN32)
 #include <dlfcn.h>
+#endif
 #include <pthread.h>
+#if !defined(_WIN32)
 #include <sys/xattr.h>
+#endif
+#if !defined(_WIN32)
 #include <grp.h>
+#endif
 #include <signal.h>
 #include <errno.h>
 #include <dirent.h>
@@ -44,32 +58,52 @@
 #include <stdarg.h>
 #include <wchar.h>
 #include <sched.h>
+#if !defined(_WIN32)
 #include <pwd.h>
+#endif
 #include <signal.h>
 #include <setjmp.h>
+#if !defined(_WIN32)
 #include <sys/signalfd.h>
+#endif
+#if !defined(_WIN32)
 #include <sys/uio.h>
+#endif
 
+#if !defined(_WIN32)
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#endif
 #include <fcntl.h>
 
+#if !defined(_WIN32)
 #include <linux/futex.h>
 #include <sys/syscall.h>
+#endif
 #include <sys/time.h>
 
+#if !defined(_WIN32)
 #include <netdb.h>
+#endif
 #include <unistd.h>
 #include <syslog.h>
 #include <locale.h>
+#if !defined(_WIN32)
 #include <sys/syscall.h>
 #include <sys/auxv.h>
 #include <sys/prctl.h>
+#endif
+#if !defined(_WIN32)
 #include <sys/uio.h>
+#endif
 
+#if !defined(_WIN32)
 #include <sys/mman.h>
+#endif
 #include <libgen.h>
+#if !defined(_WIN32)
 #include <mntent.h>
+#endif
 
 #include <hybris/properties/properties.h>
 
@@ -261,9 +295,16 @@ static int __android_pthread_cond_pulse(android_cond_t *cond, int counter)
     }
 
     int pshared = cond->value & ANDROID_COND_SHARED_MASK;
+#if defined(_WIN32)
+    (void)pshared;
+    (void)counter;
+    fret = -1;
+    errno = ENOSYS;
+#else
     fret = syscall(SYS_futex , &cond->value,
                    pshared ? FUTEX_WAKE : FUTEX_WAKE_PRIVATE, counter,
                    NULL, NULL, NULL);
+#endif
     (void)fret;
     LOGD("futex based pthread_cond_*, value %d, counter %d, ret %d",
                                             cond->value, counter, fret);
@@ -407,7 +448,11 @@ static pid_t _hybris_hook_gettid(void)
 {
     TRACE_HOOK("");
 
+#if defined(_WIN32)
+    return (pid_t)GetCurrentThreadId();
+#else
     return syscall(__NR_gettid);
+#endif
 }
 
 /*
@@ -4017,4 +4062,3 @@ void* hybris_get_exported_namespace(const char* name)
 {
     return android_get_exported_namespace(name);
 }
-

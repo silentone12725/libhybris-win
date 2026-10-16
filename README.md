@@ -125,8 +125,8 @@ Android rootfs):
 ```
 
 The current Linux GoogleTest baseline is 21 tests across five test binaries;
-the runner also exercises the standalone relocation and TLS backends, for
-seven test binaries in total.
+the runner also exercises the standalone ABI, relocation, and TLS backends,
+for eight test binaries in total.
 The Windows validation path uses the native MSYS2 UCRT64 toolchain (`gcc`,
 `g++`) and runs the resulting PE executables on Windows x64. Windows-specific
 source seams are selected with `_WIN32` and do not import the Android NDK
