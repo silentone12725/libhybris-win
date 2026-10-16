@@ -151,7 +151,11 @@ static void parse_path(const char* path, const char* delimiters,
 
 static void parse_LD_LIBRARY_PATH(const char* path) {
   std::vector<std::string> ld_libary_paths;
+#if defined(_WIN32)
+  parse_path(path, ";", &ld_libary_paths);
+#else
   parse_path(path, ":", &ld_libary_paths);
+#endif
   g_default_namespace->set_ld_library_paths(std::move(ld_libary_paths));
 }
 

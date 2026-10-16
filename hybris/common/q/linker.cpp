@@ -422,7 +422,11 @@ static void parse_path(const char* path, const char* delimiters,
 
 static void parse_LD_LIBRARY_PATH(const char* path) {
   std::vector<std::string> ld_libary_paths;
+#if defined(_WIN32)
+  parse_path(path, ";", &ld_libary_paths);
+#else
   parse_path(path, ":", &ld_libary_paths);
+#endif
   g_default_namespace->set_ld_library_paths(std::move(ld_libary_paths));
 }
 
@@ -3139,7 +3143,9 @@ bool soinfo::relocate(const VersionTracker& version_tracker, ElfRelIteratorT&& r
       sym_name = get_string(symtab_[sym].st_name);
       const version_info* vi = nullptr;
 
-      sym_addr = reinterpret_cast<ElfW(Addr)>(_get_hooked_symbol(sym_name, get_realpath()));
+      sym_addr = _get_hooked_symbol == nullptr
+                     ? 0
+                     : reinterpret_cast<ElfW(Addr)>(_get_hooked_symbol(sym_name, get_realpath()));
 
       if (!sym_addr) {
         if (!lookup_version_info(version_tracker, sym, sym_name, &vi)) {

@@ -285,7 +285,7 @@ bool ElfReader::VerifyElfHeader() {
   // Try to give a clear diagnostic for ELF class mismatches, since they're
   // an easy mistake to make during the 32-bit/64-bit transition period.
   int elf_class = header_.e_ident[EI_CLASS];
-#if defined(__LP64__)
+#if defined(__LP64__) || (defined(_WIN32) && defined(_WIN64))
   if (elf_class != ELFCLASS64) {
     if (elf_class == ELFCLASS32) {
       DL_ERR("\"%s\" is 32-bit instead of 64-bit", name_.c_str());

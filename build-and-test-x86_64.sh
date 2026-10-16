@@ -182,6 +182,36 @@ ls -lh /tmp/hybris-linker/q.so
 
 if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]]; then
     echo ""
+    echo "=== Building Android x86-64 runtime fixture ==="
+    NDK_ROOT="${ANDROID_NDK_ROOT:-$HOME/android-ndk-r26d-windows/android-ndk-r26d}"
+    ANDROID_CLANG="$NDK_ROOT/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe"
+    if [[ ! -x "$ANDROID_CLANG" ]]; then
+        echo "ANDROID_NDK_ROOT must point to an Android NDK with clang.exe" >&2
+        exit 2
+    fi
+    FIXTURE="$BUILD/android-fixture"
+    mkdir -p "$FIXTURE"
+    "$ANDROID_CLANG" --target=x86_64-linux-android29 --sysroot="$NDK_ROOT/toolchains/llvm/prebuilt/windows-x86_64/sysroot" \
+        -fPIC -fno-emulated-tls -shared -nostdlib -Wl,-soname,libhybris_fixture_dep.so \
+        "$ROOT/fixtures/windows_q_runtime_dep.c" -o "$FIXTURE/libhybris_fixture_dep.so"
+    "$ANDROID_CLANG" --target=x86_64-linux-android29 --sysroot="$NDK_ROOT/toolchains/llvm/prebuilt/windows-x86_64/sysroot" \
+        -fPIC -fno-emulated-tls -shared -nostdlib -Wl,-soname,libhybris_fixture.so \
+        -Wl,--no-as-needed -L"$FIXTURE" -lhybris_fixture_dep \
+        "$ROOT/fixtures/windows_q_runtime.c" -o "$FIXTURE/libhybris_fixture.so"
+    echo "  -> $FIXTURE/libhybris_fixture.so"
+
+    echo ""
+    echo "=== Building Windows Q runtime host ==="
+    g++ -std=c++17 -Wall -Wextra -Werror -D_WIN32 \
+        "$ROOT/hybris/tests/windows_q_runtime_smoke.cpp" -o "$BUILD/windows_q_runtime_smoke.exe"
+    echo "  -> $BUILD/windows_q_runtime_smoke.exe"
+    echo ""
+    echo "=== Running Windows Q runtime smoke test ==="
+    (cd "$FIXTURE" && \
+        HYBRIS_LD_LIBRARY_PATH="C:/msys64/tmp/hybris-x86_64-build/android-fixture" \
+        "$BUILD/windows_q_runtime_smoke.exe" \
+        "/tmp/hybris-linker/q.so" "libhybris_fixture.so")
+    echo ""
     echo "=== Windows Q-linker build complete ==="
     echo "The POSIX libhybris-core wrapper is not part of this Windows Q-linker target."
     exit 0
