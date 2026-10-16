@@ -51,6 +51,8 @@ class plain_reloc_iterator {
     return current_ < end_;
   }
 
+  bool valid() const { return true; }
+
   rel_t* next() {
     return current_++;
   }
@@ -71,44 +73,57 @@ class packed_reloc_iterator {
 #endif
  public:
   explicit packed_reloc_iterator(decoder_t&& decoder)
-      : decoder_(decoder) {
+      : decoder_(decoder), relocation_count_(0), group_size_(0), group_flags_(0),
+        group_r_offset_delta_(0), relocation_index_(0), relocation_group_index_(0),
+        valid_(true) {
     // initialize fields
     memset(&reloc_, 0, sizeof(reloc_));
-    relocation_count_ = decoder_.pop_front();
-    reloc_.r_offset = decoder_.pop_front();
-    relocation_index_ = 0;
-    relocation_group_index_ = 0;
-    group_size_ = 0;
+    if (!decoder_.pop_front(&relocation_count_) ||
+        !decoder_.pop_front(&reloc_.r_offset)) {
+      valid_ = false;
+    }
   }
 
   bool has_next() const {
-    return relocation_index_ < relocation_count_;
+    return valid_ && relocation_index_ < relocation_count_;
   }
 
+  bool valid() const { return valid_; }
+
   rel_t* next() {
+    if (!valid_) return nullptr;
     if (relocation_group_index_ == group_size_) {
       if (!read_group_fields()) {
-        // Iterator is inconsistent state; it should not be called again
-        // but in case it is let's make sure has_next() returns false.
-        relocation_index_ = relocation_count_ = 0;
         return nullptr;
       }
     }
 
+    size_t value = 0;
     if (is_relocation_grouped_by_offset_delta()) {
       reloc_.r_offset += group_r_offset_delta_;
+    } else if (!decoder_.pop_front(&value)) {
+      valid_ = false;
+      return nullptr;
     } else {
-      reloc_.r_offset += decoder_.pop_front();
+      reloc_.r_offset += value;
     }
 
     if (!is_relocation_grouped_by_info()) {
-      reloc_.r_info = decoder_.pop_front();
+      if (!decoder_.pop_front(&value)) {
+        valid_ = false;
+        return nullptr;
+      }
+      reloc_.r_info = value;
     }
 
 #if defined(USE_RELA)
     if (is_relocation_group_has_addend() &&
         !is_relocation_grouped_by_addend()) {
-      reloc_.r_addend += decoder_.pop_front();
+      if (!decoder_.pop_front(&value)) {
+        valid_ = false;
+        return nullptr;
+      }
+      reloc_.r_addend += value;
     }
 #endif
 
@@ -119,15 +134,32 @@ class packed_reloc_iterator {
   }
  private:
   bool read_group_fields() {
-    group_size_ = decoder_.pop_front();
-    group_flags_ = decoder_.pop_front();
+    size_t value = 0;
+    if (!decoder_.pop_front(&group_size_) || !decoder_.pop_front(&group_flags_)) {
+      valid_ = false;
+      return false;
+    }
+    if (group_size_ == 0 || group_size_ > relocation_count_ - relocation_index_ ||
+        (group_flags_ & ~(RELOCATION_GROUPED_BY_INFO_FLAG |
+                          RELOCATION_GROUPED_BY_OFFSET_DELTA_FLAG |
+                          RELOCATION_GROUPED_BY_ADDEND_FLAG |
+                          RELOCATION_GROUP_HAS_ADDEND_FLAG)) != 0) {
+      valid_ = false;
+      return false;
+    }
 
     if (is_relocation_grouped_by_offset_delta()) {
-      group_r_offset_delta_ = decoder_.pop_front();
+      if (!decoder_.pop_front(&group_r_offset_delta_)) {
+        valid_ = false;
+        return false;
+      }
     }
 
     if (is_relocation_grouped_by_info()) {
-      reloc_.r_info = decoder_.pop_front();
+      if (!decoder_.pop_front(&reloc_.r_info)) {
+        valid_ = false;
+        return false;
+      }
     }
 
     if (is_relocation_group_has_addend() &&
@@ -135,9 +167,14 @@ class packed_reloc_iterator {
 #if !defined(USE_RELA)
       // This platform does not support rela, and yet we have it encoded in android_rel section.
       DL_ERR("unexpected r_addend in android.rel section");
+      valid_ = false;
       return false;
 #else
-      reloc_.r_addend += decoder_.pop_front();
+      if (!decoder_.pop_front(&value)) {
+        valid_ = false;
+        return false;
+      }
+      reloc_.r_addend += value;
     } else if (!is_relocation_group_has_addend()) {
       reloc_.r_addend = 0;
 #endif
@@ -171,4 +208,5 @@ class packed_reloc_iterator {
   size_t relocation_index_;
   size_t relocation_group_index_;
   rel_t reloc_;
+  bool valid_;
 };

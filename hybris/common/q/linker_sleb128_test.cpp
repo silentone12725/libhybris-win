@@ -92,19 +92,38 @@ TEST(linker_sleb128, smoke) {
   encoding.push_back(0x7f);
 #endif
   sleb128_decoder decoder(&encoding[0], encoding.size());
+  size_t value = 0;
 
-  EXPECT_EQ(624485U, decoder.pop_front());
+  ASSERT_TRUE(decoder.pop_front(&value));
+  EXPECT_EQ(624485U, value);
 
-  EXPECT_EQ(0U, decoder.pop_front());
-  EXPECT_EQ(1U, decoder.pop_front());
-  EXPECT_EQ(63U, decoder.pop_front());
-  EXPECT_EQ(64U, decoder.pop_front());
-  EXPECT_EQ(static_cast<size_t>(-1), decoder.pop_front());
-  EXPECT_EQ(static_cast<size_t>(-624485), decoder.pop_front());
-  EXPECT_EQ(2147483647U, decoder.pop_front());
-  EXPECT_EQ(static_cast<size_t>(-2147483648), decoder.pop_front());
+  ASSERT_TRUE(decoder.pop_front(&value)); EXPECT_EQ(0U, value);
+  ASSERT_TRUE(decoder.pop_front(&value)); EXPECT_EQ(1U, value);
+  ASSERT_TRUE(decoder.pop_front(&value)); EXPECT_EQ(63U, value);
+  ASSERT_TRUE(decoder.pop_front(&value)); EXPECT_EQ(64U, value);
+  ASSERT_TRUE(decoder.pop_front(&value)); EXPECT_EQ(static_cast<size_t>(-1), value);
+  ASSERT_TRUE(decoder.pop_front(&value)); EXPECT_EQ(static_cast<size_t>(-624485), value);
+  ASSERT_TRUE(decoder.pop_front(&value)); EXPECT_EQ(2147483647U, value);
+  ASSERT_TRUE(decoder.pop_front(&value)); EXPECT_EQ(static_cast<size_t>(-2147483648), value);
 #if defined(__LP64__)
-  EXPECT_EQ(9223372036854775807ULL, decoder.pop_front());
-  EXPECT_EQ(static_cast<uint64_t>(-9223372036854775807LL - 1), decoder.pop_front());
+  ASSERT_TRUE(decoder.pop_front(&value)); EXPECT_EQ(9223372036854775807ULL, value);
+  ASSERT_TRUE(decoder.pop_front(&value));
+  EXPECT_EQ(static_cast<uint64_t>(-9223372036854775807LL - 1), value);
 #endif
+}
+
+TEST(linker_sleb128, malformed_input_is_rejected) {
+  const uint8_t truncated[] = {0xe5, 0x8e};
+  size_t value = 0;
+  sleb128_decoder decoder(truncated, sizeof(truncated));
+  EXPECT_FALSE(decoder.pop_front(&value));
+  EXPECT_TRUE(decoder.failed());
+
+  const uint8_t empty[1] = {};
+  sleb128_decoder empty_decoder(empty, 0);
+  EXPECT_FALSE(empty_decoder.pop_front(&value));
+
+  std::vector<uint8_t> unterminated(sizeof(size_t) * CHAR_BIT / 7 + 1, 0x80);
+  sleb128_decoder overflow_decoder(unterminated.data(), unterminated.size());
+  EXPECT_FALSE(overflow_decoder.pop_front(&value));
 }

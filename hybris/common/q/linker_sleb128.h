@@ -40,9 +40,10 @@
 class sleb128_decoder {
  public:
   sleb128_decoder(const uint8_t* buffer, size_t count)
-      : current_(buffer), end_(buffer+count) { }
+      : current_(buffer), end_(buffer + count), failed_(false) { }
 
-  size_t pop_front() {
+  bool pop_front(size_t* value_out) {
+    if (value_out == nullptr || failed_) return false;
     size_t value = 0;
     static const size_t size = CHAR_BIT * sizeof(value);
 
@@ -51,10 +52,17 @@ class sleb128_decoder {
 
     do {
       if (current_ >= end_) {
-        async_safe_fatal("sleb128_decoder ran out of bounds");
+        failed_ = true;
+        return false;
       }
       byte = *current_++;
-      value |= (static_cast<size_t>(byte & 127) << shift);
+      const size_t payload = byte & 127;
+      if (shift >= size ||
+          (shift == size - 1 && payload != 0 && payload != 1 && payload != 127)) {
+        failed_ = true;
+        return false;
+      }
+      value |= (payload << shift);
       shift += 7;
     } while (byte & 128);
 
@@ -62,10 +70,14 @@ class sleb128_decoder {
       value |= -(static_cast<size_t>(1) << shift);
     }
 
-    return value;
+    *value_out = value;
+    return true;
   }
+
+  bool failed() const { return failed_; }
 
  private:
   const uint8_t* current_;
   const uint8_t* const end_;
+  bool failed_;
 };

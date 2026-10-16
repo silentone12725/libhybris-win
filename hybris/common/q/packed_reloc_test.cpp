@@ -101,4 +101,53 @@ TEST(packed_reloc, aps2_relative_and_symbol_relocation) {
                             &symbol_relocation, &symbol));
   EXPECT_EQ(symbol_value, read_u64(image + symbol_offset));
   EXPECT_FALSE(iterator.has_next());
+  EXPECT_TRUE(iterator.valid());
+}
+
+namespace {
+
+void expect_invalid_aps2(const std::vector<uint8_t>& encoding) {
+  ASSERT_GE(encoding.size(), 4U);
+  packed_reloc_iterator<sleb128_decoder> iterator(
+      sleb128_decoder(encoding.data() + 4, encoding.size() - 4));
+  while (iterator.has_next()) {
+    EXPECT_EQ(nullptr, iterator.next());
+  }
+  EXPECT_FALSE(iterator.valid());
+  EXPECT_FALSE(iterator.has_next());
+  EXPECT_EQ(nullptr, iterator.next());
+}
+
+}  // namespace
+
+TEST(packed_reloc, malformed_streams_are_rejected) {
+  expect_invalid_aps2({'A', 'P', 'S', '2'});
+
+  std::vector<uint8_t> count_only = {'A', 'P', 'S', '2'};
+  append_sleb128(&count_only, 1);
+  expect_invalid_aps2(count_only);
+
+  std::vector<uint8_t> zero_group = {'A', 'P', 'S', '2'};
+  append_sleb128(&zero_group, 1);
+  append_sleb128(&zero_group, 0);
+  append_sleb128(&zero_group, 0);
+  append_sleb128(&zero_group, 0);
+  expect_invalid_aps2(zero_group);
+
+  std::vector<uint8_t> oversized_group = {'A', 'P', 'S', '2'};
+  append_sleb128(&oversized_group, 1);
+  append_sleb128(&oversized_group, 0);
+  append_sleb128(&oversized_group, 2);
+  append_sleb128(&oversized_group, RELOCATION_GROUPED_BY_OFFSET_DELTA_FLAG |
+                                      RELOCATION_GROUPED_BY_INFO_FLAG);
+  append_sleb128(&oversized_group, 0);
+  append_sleb128(&oversized_group, 0);
+  expect_invalid_aps2(oversized_group);
+
+  std::vector<uint8_t> unknown_flags = {'A', 'P', 'S', '2'};
+  append_sleb128(&unknown_flags, 1);
+  append_sleb128(&unknown_flags, 0);
+  append_sleb128(&unknown_flags, 1);
+  append_sleb128(&unknown_flags, 0x10);
+  expect_invalid_aps2(unknown_flags);
 }

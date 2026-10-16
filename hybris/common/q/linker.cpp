@@ -3667,7 +3667,7 @@ bool soinfo::relocate(const VersionTracker& version_tracker, ElfRelIteratorT&& r
     desc->arg = reinterpret_cast<size_t>(&tlsdesc_args_[pair.second]);
   }
 #endif
-  return true;
+  return rel_iterator.valid();
 }
 #endif  // !defined(__mips__)
 
