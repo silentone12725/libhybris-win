@@ -228,6 +228,32 @@ if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]]; then
         "/tmp/hybris-linker/q.so" "libhybris_fixture.so")
     echo ""
     echo "=== Windows Q-linker build complete ==="
+
+    echo ""
+    echo "=== Building dynamic TLS model fixtures ==="
+    TLS_FIXTURE="$BUILD/android-fixture/tls"
+    mkdir -p "$TLS_FIXTURE"
+    for TLS_MODEL in global-dynamic local-dynamic; do
+        "$ANDROID_CLANG" --target=x86_64-linux-android29 --sysroot="$NDK_ROOT/toolchains/llvm/prebuilt/windows-x86_64/sysroot" \
+            -fPIC -fno-emulated-tls -shared -nostdlib -ftls-model="$TLS_MODEL" \
+            "$ROOT/fixtures/tls_models.c" -o "$TLS_FIXTURE/libtls_$TLS_MODEL.so"
+    done
+    echo "  -> $TLS_FIXTURE/libtls_global-dynamic.so"
+    echo "  -> $TLS_FIXTURE/libtls_local-dynamic.so"
+
+    echo ""
+    echo "=== Building Windows dynamic TLS model host ==="
+    g++ -std=c++17 -Wall -Wextra -Werror -D_WIN32 \
+        "$ROOT/hybris/tests/windows_tls_models_smoke.cpp" -o "$BUILD/windows_tls_models_smoke.exe"
+    echo "  -> $BUILD/windows_tls_models_smoke.exe"
+
+    echo ""
+    echo "=== Running Windows dynamic TLS model smoke test ==="
+    (cd "$TLS_FIXTURE" && \
+        HYBRIS_LD_LIBRARY_PATH="C:/msys64/tmp/hybris-x86_64-build/android-fixture/tls" \
+        "$BUILD/windows_tls_models_smoke.exe" \
+        "/tmp/hybris-linker/q.so" \
+        "libtls_global-dynamic.so" "libtls_local-dynamic.so")
 fi
 
 # ── Step 2: Build libhybris-core.so (public API + hooks) ──────────────────

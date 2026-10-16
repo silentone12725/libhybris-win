@@ -360,7 +360,7 @@ if (posix_memalign(&mod_ptr, segment.alignment, segment.size) != 0) {
 // On most targets, this accessor function is __tls_get_addr and
 // TLS_GET_ADDR_CCONV is unset. 32-bit x86 uses ___tls_get_addr instead and a
 // regparm() calling convention.
-extern "C" void* TLS_GET_ADDR(const TlsIndex* ti) TLS_GET_ADDR_CCONV {
+extern "C" TLS_GET_ADDR_CCONV void* TLS_GET_ADDR(const TlsIndex* ti) {
 #if defined(_WIN32)
   return linker_tls_get_addr(ti);
 #else

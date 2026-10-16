@@ -200,7 +200,11 @@ struct TlsIndex {
 };
 
 #if defined(_WIN32)
+#if defined(__GNUC__) || defined(__clang__)
+#define TLS_GET_ADDR_CCONV __attribute__((sysv_abi))
+#else
 #define TLS_GET_ADDR_CCONV
+#endif
 #define TLS_GET_ADDR __hybris_tls_get_addr
 #elif defined(__i386__)
 #define TLS_GET_ADDR_CCONV __attribute__((regparm(1)))

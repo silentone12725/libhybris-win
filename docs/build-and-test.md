@@ -63,6 +63,11 @@ wrapper smoke defaults to that fixture because the current Windows guest TLS
 backend is dynamic/FLS-backed. The Windows mapping path still reads the real
 rootfs `system/lib64/libc.so`.
 
+The same Windows Q build also compiles NDK global-dynamic and local-dynamic
+TLS fixtures. The TLS model host loads both modules, checks initialization and
+read/write behavior, and verifies independent values on a second native
+Windows thread before unloading them.
+
 To deliberately exercise the currently unsupported real-Android initial-image
 TLS path:
 

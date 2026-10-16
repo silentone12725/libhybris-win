@@ -11,7 +11,8 @@ Status values: `VERIFIED`, `TESTED`, `PARTIAL`, `UNSUPPORTED`, and `BLOCKED`.
 | `R_X86_64_RELATIVE`, absolute, PC-relative, PLT | VERIFIED | `x86_64_relocation_test` and Q runtime fixture |
 | GOTPCREL/GOTPCRELX/REX_GOTPCRELX | VERIFIED | Linux and native Windows relocation tests |
 | `R_X86_64_GOTTPOFF` arithmetic | TESTED | Primitive tests; executable IE guest access remains incomplete |
-| TLSGD/TLSLD/TLSDESC | UNSUPPORTED | No complete linker/runtime implementation yet |
+| TLSGD/TLSLD | VERIFIED | NDK-generated global/local-dynamic fixtures; native Windows two-thread smoke |
+| TLSDESC | UNSUPPORTED | No x86-64 descriptor resolver path yet |
 | Android APS2 valid streams | VERIFIED | `packed_reloc_test` and real Linux smoke |
 | Android APS2 malformed streams | VERIFIED | Checked decoder and negative regression tests |
 | Symbol version definitions/requirements | TESTED | Emulator `libc.so` parsing and Windows ABI fix |

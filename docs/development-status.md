@@ -9,6 +9,8 @@
 - Windows ELF64/x86-64 reader and PT_LOAD mapping against emulator `libc.so`.
 - Linux real-rootfs smoke loading emulator `libm.so` and resolving `cos`.
 - GOTPCREL-family relocation coverage and Windows ELF version-field layout.
+- NDK-generated x86-64 TLSGD/TLSLD fixtures, including two-thread isolation and
+  initialization through the native Windows FLS backend.
 
 ## TESTED / PARTIAL
 
@@ -27,7 +29,7 @@
 
 ## IN_PROGRESS
 
-- Compile and inspect NDK-generated TLSGD/TLSLD/TLSDESC fixtures.
+- Compile and inspect NDK-generated TLSDESC fixtures.
 - Add priority dynamic-loader API and stress coverage.
 
 ## BLOCKED OR UNSUPPORTED

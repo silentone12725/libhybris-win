@@ -40,9 +40,12 @@ integration targets and are not implied by successful ELF loading.
 
 ## TLS model
 
-The Windows implementation currently supports guest dynamic TLS through the
-FLS backend and the `__tls_get_addr` path. It deliberately does not change the
-Windows thread pointer or FS/GS bases.
+The Windows implementation supports guest dynamic TLS through the FLS backend
+and the SysV-ABI `__tls_get_addr` path. The Q linker maps that guest symbol to
+its host-safe `__hybris_tls_get_addr` implementation when resolving Android
+GD/LD modules. NDK-generated global-dynamic and local-dynamic fixtures are
+executed on two Windows threads in the native smoke suite. It deliberately does
+not change the Windows thread pointer or FS/GS bases.
 
 Android x86-64 `libc.so` is an initial image and contains direct initial-exec
 TLS relocations. A normally loaded Windows module cannot safely consume those

@@ -101,6 +101,15 @@ static std::unordered_map<void*, size_t> g_dso_handle_counters;
 
 static std::unordered_map<std::string, android_namespace_t*> g_exported_namespaces;
 
+#if defined(_WIN32)
+// Android GD/LD TLS sequences refer to the ABI entry point by name. The
+// embedded Q linker owns this implementation, but its PE exports are not
+// represented as an Android soinfo. Make the host-safe entry point available
+// to guest ELF symbol resolution without requiring Android libc to be loaded
+// first.
+extern "C" void* __hybris_tls_get_addr(const TlsIndex*) TLS_GET_ADDR_CCONV;
+#endif
+
 static LinkerTypeAllocator<soinfo> g_soinfo_allocator;
 static LinkerTypeAllocator<LinkedListEntry<soinfo>> g_soinfo_links_allocator;
 
@@ -3150,6 +3159,12 @@ bool soinfo::relocate(const VersionTracker& version_tracker, ElfRelIteratorT&& r
       sym_addr = _get_hooked_symbol == nullptr
                      ? 0
                      : reinterpret_cast<ElfW(Addr)>(_get_hooked_symbol(sym_name, get_realpath()));
+
+#if defined(_WIN32)
+      if (sym_addr == 0 && strcmp(sym_name, "__tls_get_addr") == 0) {
+        sym_addr = reinterpret_cast<ElfW(Addr)>(&__hybris_tls_get_addr);
+      }
+#endif
 
       if (!sym_addr) {
         if (!lookup_version_info(version_tracker, sym, sym_name, &vi)) {
