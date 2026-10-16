@@ -39,15 +39,18 @@ The project currently contains a staged portability implementation:
   runpaths, and default paths
 - Q TLS registration/unregistration hooks and typed constructor, destructor,
   and no-argument IFUNC lifecycle calls under `_WIN32`
+- End-to-end Windows x64 Q-linker runtime smoke coverage using Android NDK
+  x86-64 ELF fixtures, including dependency loading, relocations, constructors,
+  SysV ABI export calls, TLS, IFUNC, `android_dlsym`, and `android_dlclose`
 - Linux regression coverage for selected Q linker units
 - Reproducible x86-64 Q-linker/core build validation and portable TLS/
   relocation regression tests
 
-The full Android dynamic-linker runtime is not complete. The full Q
-translation-unit boundary still depends on POSIX/Bionic memory, allocator,
-lock, and diagnostics headers. Relocations are not yet validated through a
-complete Windows `soinfo::relocate` dependency graph, and arbitrary exported
-Android calls still require a typed ABI signature.
+The validated Windows Q-linker path is functional for the covered x86-64
+fixture flow. The broader Android dynamic-linker/runtime surface is not
+complete: the full Q translation-unit boundary still depends on
+POSIX/Bionic memory, allocator, lock, and diagnostics headers, and arbitrary
+exported Android calls still require a typed ABI signature.
 
 JNI, Binder, graphics, media, Android properties, and other framework services
 require external providers. This repository does not contain those providers
@@ -172,16 +175,35 @@ pacman -S --needed mingw-w64-ucrt-x86_64-gcc \
   mingw-w64-ucrt-x86_64-gcc-libs make bash python
 ```
 
-From the repository checkout in that shell, generate the portable fixture and
-run the host unit suite with `make test`. To exercise the Windows ELF reader,
-the native test currently needs an Android x86-64 rootfs:
+From the repository checkout in that shell, run the host unit suite with
+`make test`. The Windows Q-linker runtime smoke test additionally needs the
+Android NDK x86-64 Clang toolchain. Set `ANDROID_NDK_ROOT` to the NDK root
+whose `toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe` exists:
+
+```bash
+export ANDROID_NDK_ROOT=/c/path/to/android-ndk-r26d
+export PATH=/ucrt64/bin:/usr/bin:$PATH
+./build-and-test-x86_64.sh
+```
+
+The Windows branch builds two local Android x86-64 ELF fixtures and a native
+Windows smoke host, then verifies dependency loading, relocations,
+constructors, SysV ABI calls, TLS, IFUNC, `android_dlsym`, and
+`android_dlclose`. It does not require an Android rootfs. A successful run
+ends with:
+
+```text
+PASS: Windows Q runtime load, dependency, IFUNC, TLS, and close
+```
+
+The separate Windows mapping/unit path still uses an Android x86-64 rootfs:
 
 ```bash
 export HYBRIS_ROOTFS=/c/path/to/android/rootfs
 ./build-and-test-windows.sh
 ```
 
-The script expects `$HYBRIS_ROOTFS/system/lib64/libc.so` and runs the
+That path expects `$HYBRIS_ROOTFS/system/lib64/libc.so` and runs the
 relocation, TLS, and Windows ELF mapping tests. Use forward-slash MSYS paths;
 the script handles MSYS2 argument conversion for the loader's embedded path
 defaults. The generated minimal fixture is useful for parser-level checks but
