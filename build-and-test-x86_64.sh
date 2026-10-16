@@ -10,6 +10,7 @@ Q="$REPO/common/q"
 COMMON="$REPO/common"
 INC="$REPO/include"
 HYBRIS_ROOTFS="${HYBRIS_ROOTFS:-}"
+HYBRIS_LINKER_DIR="${HYBRIS_LINKER_DIR:-}"
 BUILD="/tmp/hybris-x86_64-build"
 
 # MSYS2 rewrites command-line arguments that look like POSIX paths before
@@ -111,7 +112,17 @@ if [[ "$TARGET_TRIPLE" != *mingw* && "$TARGET_TRIPLE" != *msys* ]]; then
     CFLAGS_COMMON+=("-DDEFAULT_HYBRIS_LD_LIBRARY_PATH=\"$LD_LIBRARY_PATH_DEFAULT\"")
     LINK_LIBS=(-lpthread -ldl -lrt -lsupc++)
 else
+    # MinGW-w64 uses LLP64 and does not define __LP64__, but this target still
+    # consumes Android's 64-bit ABI headers and must use their 64-bit branch.
+    CFLAGS_COMMON+=(-D__LP64__)
     LINK_LIBS=(-lsupc++)
+fi
+
+if [[ -z "$HYBRIS_LINKER_DIR" ]]; then
+    HYBRIS_LINKER_DIR="/tmp/hybris-linker"
+    if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]] && command -v cygpath >/dev/null 2>&1; then
+        HYBRIS_LINKER_DIR="$(cygpath -m /tmp/hybris-linker)"
+    fi
 fi
 
 compile_src() {
@@ -374,5 +385,6 @@ else
     mkdir -p /tmp/hybris-linker
     HYBRIS_ROOTFS="$HYBRIS_ROOTFS" \
         HYBRIS_LD_LIBRARY_PATH="$HYBRIS_ROOTFS" \
+        HYBRIS_LINKER_DIR="$HYBRIS_LINKER_DIR" \
         "$BUILD/test_hybris_dlopen"
 fi

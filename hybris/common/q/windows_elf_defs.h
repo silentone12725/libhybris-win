@@ -86,9 +86,9 @@ typedef struct {
 typedef struct { Elf64_Addr r_offset; Elf64_Xword r_info; } Elf64_Rel;
 typedef struct { Elf64_Addr r_offset; Elf64_Xword r_info; Elf64_Sxword r_addend; } Elf64_Rela;
 
-typedef struct { Elf64_Word vd_version, vd_flags; Elf64_Half vd_ndx, vd_cnt; Elf64_Word vd_hash, vd_aux, vd_next; } Elf64_Verdef;
+typedef struct { Elf64_Half vd_version, vd_flags, vd_ndx, vd_cnt; Elf64_Word vd_hash, vd_aux, vd_next; } Elf64_Verdef;
 typedef struct { Elf64_Word vda_name, vda_next; } Elf64_Verdaux;
-typedef struct { Elf64_Word vn_version, vn_cnt, vn_file, vn_aux, vn_next; } Elf64_Verneed;
+typedef struct { Elf64_Half vn_version, vn_cnt; Elf64_Word vn_file, vn_aux, vn_next; } Elf64_Verneed;
 typedef struct { Elf64_Word vna_hash; Elf64_Half vna_flags, vna_other; Elf64_Word vna_name, vna_next; } Elf64_Vernaux;
 
 #define ELF64_R_SYM(i) ((Elf64_Xword)((i) >> 32))
