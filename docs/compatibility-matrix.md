@@ -13,7 +13,7 @@ Status values: `VERIFIED`, `TESTED`, `PARTIAL`, `UNSUPPORTED`, and `BLOCKED`.
 | `R_X86_64_GOTTPOFF` arithmetic | TESTED | Primitive tests; executable IE guest access remains incomplete |
 | TLSGD/TLSLD/TLSDESC | UNSUPPORTED | No complete linker/runtime implementation yet |
 | Android APS2 valid streams | VERIFIED | `packed_reloc_test` and real Linux smoke |
-| Android APS2 malformed streams | IN_PROGRESS | Hardening and negative tests are pending |
+| Android APS2 malformed streams | VERIFIED | Checked decoder and negative regression tests |
 | Symbol version definitions/requirements | TESTED | Emulator `libc.so` parsing and Windows ABI fix |
 | Constructors/destructors | VERIFIED | Windows Q fixture runtime smoke |
 | IFUNC resolution | VERIFIED | Windows Q fixture runtime smoke |

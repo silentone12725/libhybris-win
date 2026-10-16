@@ -18,11 +18,17 @@
 - `dladdr`, `dlvsym`, and `dl_iterate_phdr` internal paths; public Windows
   end-to-end coverage is incomplete.
 
+## IMPLEMENTED / TESTED
+
+- Hardened APS2/SLEB128 decoding against truncation, invalid flags, zero-sized
+  groups, oversized groups, and decoder-width overflow; `make test` passes.
+- Added a machine-readable compatibility matrix and durable engineering ledger.
+- Expand real Android library execution coverage.
+
 ## IN_PROGRESS
 
-- Harden APS2/SLEB128 decoding against malformed external input.
-- Add a machine-readable compatibility matrix and durable engineering ledger.
-- Expand real Android library execution coverage.
+- Compile and inspect NDK-generated TLSGD/TLSLD/TLSDESC fixtures.
+- Add priority dynamic-loader API and stress coverage.
 
 ## BLOCKED OR UNSUPPORTED
 
