@@ -161,10 +161,11 @@ HYBRIS_ROOTFS=/c/path/to/android/rootfs ./build-and-test-windows.sh
 
 This validates the Windows file reader, PT_LOAD reservation/commit/protection,
 FLS-backed TLS backend, and x86-64 relocation primitives. The native Windows
-build script also compiles and links the complete Q linker plugin (`q.so`) and
-the public `libhybris-core` wrapper. Unsupported Linux-only wrapper facilities
-remain explicit `ENOSYS` stubs; JNI, Binder, graphics, and media providers are
-outside this target.
+build script compiles and links the complete Q linker plugin (`q.so`); the
+public `libhybris-core` wrapper has a first portability layer, but its full
+MSYS2/UCRT64 build is still blocked by remaining Linux-only hook declarations.
+Unsupported wrapper facilities remain explicit `ENOSYS` stubs; JNI, Binder,
+graphics, and media providers are outside this target.
 
 ### Windows MSYS2/UCRT64
 
