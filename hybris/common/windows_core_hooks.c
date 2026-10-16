@@ -11,6 +11,9 @@ typedef void *(*android_dlopen_fn)(const char *, int);
 typedef void *(*android_dlsym_fn)(void *, const char *);
 typedef int (*android_dlclose_fn)(void *);
 typedef char *(*android_dlerror_fn)(void);
+typedef void *(*android_dlvsym_fn)(void *, const char *, const char *);
+typedef int (*android_dladdr_fn)(const void *, void *);
+typedef int (*android_dl_iterate_phdr_fn)(int (*)(void *, size_t, void *), void *);
 typedef void (*android_linker_init_fn)(int, void *(*)(const char *, const char *), int);
 typedef void *(*android_dlopen_ext_fn)(const char *, int, const void *);
 typedef void (*android_get_path_fn)(char *, size_t);
@@ -21,6 +24,9 @@ static android_dlopen_fn linker_dlopen;
 static android_dlsym_fn linker_dlsym;
 static android_dlclose_fn linker_dlclose;
 static android_dlerror_fn linker_dlerror;
+static android_dlvsym_fn linker_dlvsym;
+static android_dladdr_fn linker_dladdr;
+static android_dl_iterate_phdr_fn linker_dl_iterate_phdr;
 static android_dlopen_ext_fn linker_dlopen_ext;
 static android_get_path_fn linker_get_path;
 static android_update_path_fn linker_update_path;
@@ -62,6 +68,10 @@ static int windows_linker_init(void) {
     linker_dlsym = (android_dlsym_fn)windows_symbol("android_dlsym");
     linker_dlclose = (android_dlclose_fn)windows_symbol("android_dlclose");
     linker_dlerror = (android_dlerror_fn)windows_symbol("android_dlerror");
+    linker_dlvsym = (android_dlvsym_fn)windows_symbol("android_dlvsym");
+    linker_dladdr = (android_dladdr_fn)windows_symbol("android_dladdr");
+    linker_dl_iterate_phdr =
+        (android_dl_iterate_phdr_fn)windows_symbol("android_dl_iterate_phdr");
     linker_dlopen_ext = (android_dlopen_ext_fn)windows_symbol("android_dlopen_ext");
     linker_get_path = (android_get_path_fn)windows_symbol("android_get_LD_LIBRARY_PATH");
     linker_update_path = (android_update_path_fn)windows_symbol("android_update_LD_LIBRARY_PATH");
@@ -100,6 +110,27 @@ int android_dlclose(void *handle) {
     return linker_dlclose(handle);
 }
 
+void *android_dlvsym(void *handle, const char *symbol, const char *version) {
+    if (windows_linker_init() != 0 || linker_dlvsym == NULL) return NULL;
+    return linker_dlvsym(handle, symbol, version);
+}
+
+int android_dladdr(const void *addr, void *info) {
+    if (windows_linker_init() != 0 || linker_dladdr == NULL) {
+        errno = ENOSYS;
+        return 0;
+    }
+    return linker_dladdr(addr, info);
+}
+
+int android_dl_iterate_phdr(int (*callback)(void *, size_t, void *), void *data) {
+    if (windows_linker_init() != 0 || linker_dl_iterate_phdr == NULL) {
+        errno = ENOSYS;
+        return -1;
+    }
+    return linker_dl_iterate_phdr(callback, data);
+}
+
 void *android_dlopen_ext(const char *filename, int flag, const void *extinfo) {
     if (windows_linker_init() != 0 || linker_dlopen_ext == NULL) return NULL;
     return linker_dlopen_ext(filename, flag, extinfo);
@@ -120,8 +151,5 @@ void *hybris_dlsym(void *handle, const char *symbol) { return android_dlsym(hand
 int hybris_dlclose(void *handle) { return android_dlclose(handle); }
 char *hybris_dlerror(void) { return android_dlerror(); }
 int hybris_dladdr(const void *addr, void *info) {
-    (void)addr;
-    (void)info;
-    errno = ENOSYS;
-    return 0;
+    return android_dladdr(addr, info);
 }

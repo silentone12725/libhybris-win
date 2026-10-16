@@ -63,6 +63,10 @@ wrapper smoke defaults to that fixture because the current Windows guest TLS
 backend is dynamic/FLS-backed. The Windows mapping path still reads the real
 rootfs `system/lib64/libc.so`.
 
+The Q fixture host also checks `dladdr`, the missing-symbol failure behavior of
+`dlvsym`, and `dl_iterate_phdr` enumeration. These checks cover the Q linker
+exports directly; they do not imply complete Android symbol-version policy.
+
 The same Windows Q build also compiles NDK global-dynamic and local-dynamic
 TLS fixtures. The TLS model host loads both modules, checks initialization and
 read/write behavior, and verifies independent values on a second native

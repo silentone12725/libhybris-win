@@ -19,9 +19,9 @@ Status values: `VERIFIED`, `TESTED`, `PARTIAL`, `UNSUPPORTED`, and `BLOCKED`.
 | Constructors/destructors | VERIFIED | Windows Q fixture runtime smoke |
 | IFUNC resolution | VERIFIED | Windows Q fixture runtime smoke |
 | `android_dlopen`/`android_dlsym`/`android_dlclose` | TESTED | Linux real-rootfs and Windows fixture smoke |
-| `dladdr` | PARTIAL | Linker implementation exists; Windows wrapper coverage is missing |
-| `dlvsym` | PARTIAL | Q symbol path exists; end-to-end versioned-symbol test is missing |
-| `dl_iterate_phdr` | PARTIAL | Internal implementation exists; Windows public-path coverage is missing |
+| `dladdr` | VERIFIED | Native Windows Q fixture resolves its exported function address |
+| `dlvsym` | TESTED | Native Windows Q fixture exercises missing-symbol failure path; versioned-symbol semantics remain limited |
+| `dl_iterate_phdr` | VERIFIED | Native Windows Q fixture enumerates loaded program headers |
 | Namespaces and search paths | TESTED | Q source and fixture path coverage; broader graph coverage pending |
 | Typed SysV/Microsoft x64 calls | TESTED | ABI thunk regression suite and Q exports |
 | Arbitrary variadic forwarding | UNSUPPORTED | No safe generic bridge |

@@ -10,7 +10,7 @@ Statuses: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `IMPLEMENTED`, `TESTED`,
 | ENG-003 | Harden APS2/SLEB128 malformed-input handling | Q iterator callers | `make test`; malformed SLEB/APS2 tests; native Linux and Windows Q builds | TESTED |
 | ENG-004 | Implement remaining TLS relocation models | NDK fixture generation; guest TLS design | Native Windows TLSGD/TLSLD fixture smoke passes; TLSDESC remains | TESTED |
 | ENG-005 | Decide and implement safe prebuilt IE/LE TLS execution | Windows TLS design | Native Windows real `libc.so` failure is reproduced | BLOCKED |
-| ENG-006 | Complete priority dynamic-loader API tests | Q API internals | Existing internal `dladdr`/`dl_iterate_phdr` paths | NOT_STARTED |
+| ENG-006 | Complete priority dynamic-loader API tests | Q API internals | Native Windows fixture covers `dladdr`, `dlvsym` missing-symbol path, and `dl_iterate_phdr` | TESTED |
 | ENG-007 | Expand ABI bridge coverage | Signature definition | Current typed thunk tests | NOT_STARTED |
 | ENG-008 | Exercise additional real Android libraries | Dependency-compatible artifacts | Emulator API 35 x86-64 rootfs | NOT_STARTED |
 | ENG-009 | Windows stress/error audit | Core APIs and fixtures | Native Windows host available over SSH | NOT_STARTED |

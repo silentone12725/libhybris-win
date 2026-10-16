@@ -11,6 +11,8 @@
 - GOTPCREL-family relocation coverage and Windows ELF version-field layout.
 - NDK-generated x86-64 TLSGD/TLSLD fixtures, including two-thread isolation and
   initialization through the native Windows FLS backend.
+- Native Windows Q smoke coverage for `dladdr`, `dlvsym` failure behavior, and
+  `dl_iterate_phdr`.
 
 ## TESTED / PARTIAL
 
@@ -30,7 +32,7 @@
 ## IN_PROGRESS
 
 - Compile and inspect NDK-generated TLSDESC fixtures.
-- Add priority dynamic-loader API and stress coverage.
+- Add priority dynamic-loader stress and namespace coverage.
 
 ## BLOCKED OR UNSUPPORTED
 

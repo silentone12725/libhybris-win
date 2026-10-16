@@ -8,6 +8,15 @@ using android_dlopen_fn = void* (*)(const char*, int);
 using android_dlsym_fn = void* (*)(void*, const char*);
 using android_dlclose_fn = int (*)(void*);
 using android_dlerror_fn = char* (*)();
+using android_dlvsym_fn = void* (*)(void*, const char*, const char*);
+struct guest_dl_info {
+    const char* dli_fname;
+    void* dli_fbase;
+    const char* dli_sname;
+    void* dli_saddr;
+};
+using android_dladdr_fn = int (*)(const void*, guest_dl_info*);
+using android_dl_iterate_phdr_fn = int (*)(int (*)(void*, size_t, void*), void*);
 using android_linker_init_fn = void (*)(int, void* (*)(const char*, const char*), int);
 using int_fn = int (*)();
 using uintptr_fn = uintptr_t (*)();
@@ -26,6 +35,11 @@ static int fail(const char* message, android_dlerror_fn error = nullptr) {
                  error != nullptr && error() != nullptr ? ": " : "",
                  error != nullptr && error() != nullptr ? error() : "");
     return 1;
+}
+
+static int count_phdrs(void*, size_t, void* data) {
+    ++*static_cast<int*>(data);
+    return 0;
 }
 
 template <typename T>
@@ -55,6 +69,9 @@ int main(int argc, char** argv) {
     auto dlsym = proc<android_dlsym_fn>(q, "android_dlsym");
     auto dlclose = proc<android_dlclose_fn>(q, "android_dlclose");
     auto dlerror = proc<android_dlerror_fn>(q, "android_dlerror");
+    auto dlvsym = proc<android_dlvsym_fn>(q, "android_dlvsym");
+    auto dladdr = proc<android_dladdr_fn>(q, "android_dladdr");
+    auto dl_iterate_phdr = proc<android_dl_iterate_phdr_fn>(q, "android_dl_iterate_phdr");
     auto linker_init = proc<android_linker_init_fn>(q, "android_linker_init");
     std::printf("[3] exports resolved\n");
     std::fflush(stdout);
@@ -83,12 +100,26 @@ int main(int argc, char** argv) {
         return fail("android_dlsym", dlerror);
     }
 
+    guest_dl_info info = {};
+    if (dladdr == nullptr || dladdr(reinterpret_cast<const void*>(constructor_ran), &info) != 1 ||
+        info.dli_fname == nullptr) {
+        return fail("android_dladdr", dlerror);
+    }
+    int phdr_count = 0;
+    if (dl_iterate_phdr == nullptr || dl_iterate_phdr(count_phdrs, &phdr_count) != 0 ||
+        phdr_count == 0) {
+        return fail("android_dl_iterate_phdr", dlerror);
+    }
+    if (dlvsym != nullptr && dlvsym(fixture, "missing_symbol", "missing") != nullptr) {
+        return fail("android_dlvsym resolved a missing symbol");
+    }
+
     if (constructor_ran() != 1) return fail("constructor did not run");
     *tls = 5;
     if (tls_value(tls) != 5) return fail("TLS value mismatch");
     if (dependency_value() != 37) return fail("dependency relocation mismatch");
     if (ifunc() != 42) return fail("IFUNC result mismatch");
     if (dlclose(fixture) != 0) return fail("android_dlclose", dlerror);
-    std::printf("PASS: Windows Q runtime load, dependency, IFUNC, TLS, and close\n");
+    std::printf("PASS: Windows Q runtime load, TLS, IFUNC, loader APIs, and close\n");
     return 0;
 }

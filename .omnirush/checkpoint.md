@@ -4,8 +4,8 @@
 - Branch: `master`
 - Remote: `origin/master` at `efab890`; local branch is ahead by 8 commits.
 - Working tree at checkpoint creation: clean after the APS2 hardening commit.
-- Active task: continue from TLSGD/TLSLD into TLSDESC and priority
-  dynamic-loader API coverage.
+- Active task: continue from TLSGD/TLSLD and priority loader APIs into
+  namespace/lifetime stress and real-library expansion.
 - Linux baseline and post-change tests: `make test` passed, 9 test binaries;
   `build-and-test-x86_64.sh` built successfully; real-rootfs `libm.so` smoke
   loaded and resolved `cos`.
@@ -17,6 +17,7 @@
   reaches the unsupported initial-exec/static TLS path.
 - Native Windows post-change evidence: relocation/ELF-reader tests passed,
   Q fixture runtime passed, core fixture smoke passed using dynamic TLS, and
-  NDK-generated TLSGD/TLSLD fixtures passed with two-thread isolation.
-- Next action: determine whether the x86-64 NDK emits TLSDESC for this target,
-  then implement or explicitly reject the generated descriptor sequence.
+  NDK-generated TLSGD/TLSLD fixtures passed with two-thread isolation; the Q
+  fixture also passed `dladdr`, `dlvsym` missing-symbol, and `dl_iterate_phdr`.
+- Next action: inspect namespace/lifetime behavior under repeated load/unload,
+  then expand real Android library execution coverage.

@@ -26,6 +26,8 @@ integration targets and are not implied by successful ELF loading.
      namespaces, and relocation tables.
    - Uses the Android/Bionic linker interfaces retained under
      `hybris/common/q`.
+   - Exposes the priority loader APIs (`dladdr`, `dlvsym`, and
+     `dl_iterate_phdr`) through the Windows core forwarding layer.
 
 3. **Bionic compatibility seams**
    - Redirects selected Bionic runtime operations to the host implementation.
