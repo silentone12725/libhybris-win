@@ -147,10 +147,14 @@ an external Android rootfs:
 
 To additionally run the Android `dlopen` smoke test, point the script at an
 x86-64 Android rootfs. A different library can be selected with
-`HYBRIS_SMOKE_LIBRARY`:
+`HYBRIS_SMOKE_LIBRARY`; use `HYBRIS_SMOKE_SYMBOL` to select an export present
+in that library:
 
 ```bash
-HYBRIS_ROOTFS=/path/to/android/system/lib64 ./build-and-test-x86_64.sh
+HYBRIS_ROOTFS=/path/to/android/system/lib64 \
+HYBRIS_SMOKE_LIBRARY=/path/to/android/system/lib64/libm.so \
+HYBRIS_SMOKE_SYMBOL=cos \
+./build-and-test-x86_64.sh
 ```
 
 On Windows with MSYS2/UCRT64, the native portability layer and ELF mapping

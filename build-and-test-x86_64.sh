@@ -309,9 +309,6 @@ int main() {
         fflush(stdout);
     }
 
-    printf("[test] Attempting android_dlopen(libstoreservicescore.so)\n");
-    fflush(stdout);
-
     char lib_path[512];
     const char *configured_lib = getenv("HYBRIS_SMOKE_LIBRARY");
     if (configured_lib != nullptr && configured_lib[0] != '\0') {
@@ -319,6 +316,8 @@ int main() {
     } else {
         snprintf(lib_path, sizeof(lib_path), "%s/libstoreservicescore.so", rootfs);
     }
+    printf("[test] Attempting android_dlopen(%s)\n", lib_path);
+    fflush(stdout);
     const char *lib = lib_path;
     void *handle = android_dlopen(lib, RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
@@ -327,8 +326,12 @@ int main() {
     }
     printf("[OK]   android_dlopen succeeded: handle=%p\n", handle);
 
-    // Try resolving a known exported symbol: storeservicescore::DeviceGUID::instance()
-    const char *sym = "_ZN17storeservicescore10DeviceGUID8instanceEv";
+    // Resolve a caller-selected symbol, or retain the historical default for
+    // the storeservicescore fixture.
+    const char *configured_symbol = getenv("HYBRIS_SMOKE_SYMBOL");
+    const char *sym = (configured_symbol != nullptr && configured_symbol[0] != '\0')
+        ? configured_symbol
+        : "_ZN17storeservicescore10DeviceGUID8instanceEv";
     void *fn = android_dlsym(handle, sym);
     if (!fn) {
         printf("[FAIL] android_dlsym(%s): %s\n", sym, android_dlerror());
