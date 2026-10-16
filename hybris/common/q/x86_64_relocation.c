@@ -40,6 +40,9 @@ q_x86_64_reloc_result q_x86_64_apply_relocation(
             break;
         case Q_R_X86_64_PC32:
         case Q_R_X86_64_PLT32:
+        case Q_R_X86_64_GOTPCREL:
+        case Q_R_X86_64_GOTPCRELX:
+        case Q_R_X86_64_REX_GOTPCRELX:
         case Q_R_X86_64_32:
         case Q_R_X86_64_32S:
         case Q_R_X86_64_DTPOFF32:
@@ -93,13 +96,19 @@ q_x86_64_reloc_result q_x86_64_apply_relocation(
     }
 
     if (rel->type == Q_R_X86_64_PC8 || rel->type == Q_R_X86_64_PC16 ||
-        rel->type == Q_R_X86_64_PC32 || rel->type == Q_R_X86_64_PLT32 ||
-        rel->type == Q_R_X86_64_PC64) {
+         rel->type == Q_R_X86_64_PC32 || rel->type == Q_R_X86_64_PLT32 ||
+         rel->type == Q_R_X86_64_GOTPCREL ||
+         rel->type == Q_R_X86_64_GOTPCRELX ||
+         rel->type == Q_R_X86_64_REX_GOTPCRELX ||
+         rel->type == Q_R_X86_64_PC64) {
         value -= place;
         if ((rel->type == Q_R_X86_64_PC8 && !fits_signed(value, 8)) ||
             (rel->type == Q_R_X86_64_PC16 && !fits_signed(value, 16)) ||
             ((rel->type == Q_R_X86_64_PC32 ||
-              rel->type == Q_R_X86_64_PLT32) && !fits_signed(value, 32))) {
+              rel->type == Q_R_X86_64_PLT32 ||
+              rel->type == Q_R_X86_64_GOTPCREL ||
+              rel->type == Q_R_X86_64_GOTPCRELX ||
+              rel->type == Q_R_X86_64_REX_GOTPCRELX) && !fits_signed(value, 32))) {
             return Q_RELOC_OUT_OF_RANGE;
         }
     } else if (rel->type == Q_R_X86_64_32 && value > UINT32_MAX) {

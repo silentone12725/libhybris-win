@@ -23,7 +23,9 @@ enum {
     R_DTPOFF32 = 21,
     R_TPOFF32 = 23,
     R_PC64 = 24,
-    R_GOTPCREL = 9
+    R_GOTPCREL = 9,
+    R_GOTPCRELX = 41,
+    R_REX_GOTPCRELX = 42
 };
 
 static int failures;
@@ -183,9 +185,21 @@ int main(void) {
     rel = (q_x86_64_relocation){R_64, vaddr + 124, 0};
     result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, &symbol);
     expect("bounds check", result == Q_RELOC_OUT_OF_BOUNDS);
-    rel = (q_x86_64_relocation){R_GOTPCREL, vaddr, 0};
+    rel = (q_x86_64_relocation){R_GOTPCREL, vaddr + 96, 4};
+    symbol.value = (uint64_t)(uintptr_t)(image + 96) + 0x200;
     result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, &symbol);
-    expect("GOT relocation unsupported", result == Q_RELOC_UNSUPPORTED);
+    expect("GOTPCREL relocation", result == Q_RELOC_OK &&
+           read_u32(image + 96) == 0x204);
+    rel = (q_x86_64_relocation){R_GOTPCRELX, vaddr + 100, 0};
+    symbol.value = (uint64_t)(uintptr_t)(image + 100) - 0x80;
+    result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, &symbol);
+    expect("GOTPCRELX relocation", result == Q_RELOC_OK &&
+           read_u32(image + 100) == (uint32_t)-0x80);
+    rel = (q_x86_64_relocation){R_REX_GOTPCRELX, vaddr + 104, 0};
+    symbol.value = (uint64_t)(uintptr_t)(image + 104) + 0x40;
+    result = q_x86_64_apply_relocation(image, sizeof(image), vaddr, &rel, &symbol);
+    expect("REX_GOTPCRELX relocation", result == Q_RELOC_OK &&
+           read_u32(image + 104) == 0x40);
 
     printf("RESULT: %s failures=%d\n", failures == 0 ? "PASS" : "FAIL", failures);
     return failures == 0 ? 0 : 1;

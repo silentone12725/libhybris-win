@@ -28,6 +28,7 @@ enum {
     Q_R_X86_64_NONE = 0,
     Q_R_X86_64_64 = 1,
     Q_R_X86_64_PC32 = 2,
+    Q_R_X86_64_GOTPCREL = 9,
     Q_R_X86_64_PLT32 = 4,
     Q_R_X86_64_GLOB_DAT = 6,
     Q_R_X86_64_JUMP_SLOT = 7,
@@ -43,7 +44,9 @@ enum {
     Q_R_X86_64_TPOFF64 = 18,
     Q_R_X86_64_DTPOFF32 = 21,
     Q_R_X86_64_TPOFF32 = 23,
-    Q_R_X86_64_PC64 = 24
+    Q_R_X86_64_PC64 = 24,
+    Q_R_X86_64_GOTPCRELX = 41,
+    Q_R_X86_64_REX_GOTPCRELX = 42
 };
 
 typedef enum {
