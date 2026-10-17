@@ -297,6 +297,7 @@ echo "=== Building dlopen smoke test ==="
 cat > "$BUILD/test_hybris_dlopen.cpp" << 'TESTEOF'
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #if defined(_WIN32)
 #include "windows_core_compat.h"
 #else
@@ -376,6 +377,28 @@ int main() {
         printf("[OK]   android_dlsym resolved: %s -> %p\n", sym, fn);
     }
 
+    const char *operation = getenv("HYBRIS_SMOKE_OPERATION");
+    if (fn && operation != nullptr && strcmp(operation, "cos") == 0) {
+        typedef double (*cos_fn)(double);
+        double result = reinterpret_cast<cos_fn>(fn)(0.0);
+        if (result < 0.999999 || result > 1.000001) {
+            printf("[FAIL] cos(0) returned %.17g\n", result);
+            fn = nullptr;
+        } else {
+            printf("[OK]   cos(0) returned %.17g\n", result);
+        }
+    } else if (fn && operation != nullptr && strcmp(operation, "crc32") == 0) {
+        typedef unsigned long (*crc32_fn)(unsigned long, const unsigned char *, unsigned int);
+        unsigned long result = reinterpret_cast<crc32_fn>(fn)(
+            0, reinterpret_cast<const unsigned char*>("hello"), 5);
+        if (result != 0x3610a686UL) {
+            printf("[FAIL] crc32(hello) returned 0x%lx\n", result);
+            fn = nullptr;
+        } else {
+            printf("[OK]   crc32(hello) returned 0x%lx\n", result);
+        }
+    }
+
     // Try a simpler exported symbol
     const char *sym2 = "JNI_OnLoad";
     void *fn2 = android_dlsym(handle, sym2);
@@ -430,5 +453,6 @@ else
         HYBRIS_LINKER_DIR="$HYBRIS_LINKER_DIR" \
         HYBRIS_SMOKE_LIBRARY="$SMOKE_LIBRARY" \
         HYBRIS_SMOKE_SYMBOL="$SMOKE_SYMBOL" \
+        HYBRIS_SMOKE_OPERATION="${HYBRIS_SMOKE_OPERATION:-}" \
         "$BUILD/test_hybris_dlopen"
 fi

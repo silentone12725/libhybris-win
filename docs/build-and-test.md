@@ -28,6 +28,7 @@ system libraries:
 HYBRIS_ROOTFS=/path/to/system/lib64 \
 HYBRIS_SMOKE_LIBRARY=/path/to/system/lib64/libm.so \
 HYBRIS_SMOKE_SYMBOL=cos \
+HYBRIS_SMOKE_OPERATION=cos \
 ./build-and-test-x86_64.sh
 ```
 
@@ -43,7 +44,10 @@ adb -s emulator-5554 pull /system/bin/linker64 /tmp/android-x86_64-rootfs/system
 ```
 
 The Linux real-library smoke used an Android x86-64 emulator rootfs and loaded
-`libm.so`, resolving and checking the `cos` export.
+`libm.so`, resolving and executing `cos(0)`. For the emulator's `libz.so`, use
+the same command with `HYBRIS_SMOKE_LIBRARY=.../libz.so`,
+`HYBRIS_SMOKE_SYMBOL=crc32`, and `HYBRIS_SMOKE_OPERATION=crc32` to execute a
+representative checksum operation.
 
 ## Native Windows
 
