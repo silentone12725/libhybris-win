@@ -83,43 +83,42 @@ int main(int argc, char** argv) {
     std::printf("[3b] Q linker initialized\n");
     std::fflush(stdout);
 
-    std::printf("[4] loading fixture: %s\n", argv[2]);
+    std::printf("[4] loading fixture repeatedly: %s\n", argv[2]);
     std::fflush(stdout);
-    void* fixture = dlopen(argv[2], 2 /* RTLD_NOW */);
-    std::printf("[5] fixture handle: %p\n", fixture);
-    std::fflush(stdout);
-    if (fixture == nullptr) return fail("android_dlopen", dlerror);
-    auto constructor_ran = symbol<elf_int_fn>(fixture, dlsym, "hybris_fixture_constructor_ran");
-    auto tls_value = symbol<elf_tls_value_fn>(fixture, dlsym, "hybris_fixture_tls_value");
-    auto tls = symbol<int*>(fixture, dlsym, "hybris_fixture_tls");
-    auto dependency_value = symbol<elf_int_fn>(fixture, dlsym, "hybris_fixture_dependency_value_from_main");
-    auto ifunc = symbol<elf_uintptr_fn>(fixture, dlsym, "hybris_fixture_ifunc");
-    if (constructor_ran == nullptr ||
-        tls_value == nullptr || tls == nullptr ||
-        dependency_value == nullptr || ifunc == nullptr) {
-        return fail("android_dlsym", dlerror);
-    }
+    for (int iteration = 0; iteration < 8; ++iteration) {
+        void* fixture = dlopen(argv[2], 2 /* RTLD_NOW */);
+        if (fixture == nullptr) return fail("android_dlopen", dlerror);
+        auto constructor_ran = symbol<elf_int_fn>(fixture, dlsym, "hybris_fixture_constructor_ran");
+        auto tls_value = symbol<elf_tls_value_fn>(fixture, dlsym, "hybris_fixture_tls_value");
+        auto tls = symbol<int*>(fixture, dlsym, "hybris_fixture_tls");
+        auto dependency_value = symbol<elf_int_fn>(fixture, dlsym, "hybris_fixture_dependency_value_from_main");
+        auto ifunc = symbol<elf_uintptr_fn>(fixture, dlsym, "hybris_fixture_ifunc");
+        if (constructor_ran == nullptr || tls_value == nullptr || tls == nullptr ||
+            dependency_value == nullptr || ifunc == nullptr) {
+            return fail("android_dlsym", dlerror);
+        }
 
-    guest_dl_info info = {};
-    if (dladdr == nullptr || dladdr(reinterpret_cast<const void*>(constructor_ran), &info) != 1 ||
-        info.dli_fname == nullptr) {
-        return fail("android_dladdr", dlerror);
-    }
-    int phdr_count = 0;
-    if (dl_iterate_phdr == nullptr || dl_iterate_phdr(count_phdrs, &phdr_count) != 0 ||
-        phdr_count == 0) {
-        return fail("android_dl_iterate_phdr", dlerror);
-    }
-    if (dlvsym != nullptr && dlvsym(fixture, "missing_symbol", "missing") != nullptr) {
-        return fail("android_dlvsym resolved a missing symbol");
-    }
+        guest_dl_info info = {};
+        if (dladdr == nullptr || dladdr(reinterpret_cast<const void*>(constructor_ran), &info) != 1 ||
+            info.dli_fname == nullptr) {
+            return fail("android_dladdr", dlerror);
+        }
+        int phdr_count = 0;
+        if (dl_iterate_phdr == nullptr || dl_iterate_phdr(count_phdrs, &phdr_count) != 0 ||
+            phdr_count == 0) {
+            return fail("android_dl_iterate_phdr", dlerror);
+        }
+        if (dlvsym != nullptr && dlvsym(fixture, "missing_symbol", "missing") != nullptr) {
+            return fail("android_dlvsym resolved a missing symbol");
+        }
 
-    if (constructor_ran() != 1) return fail("constructor did not run");
-    *tls = 5;
-    if (tls_value(tls) != 5) return fail("TLS value mismatch");
-    if (dependency_value() != 37) return fail("dependency relocation mismatch");
-    if (ifunc() != 42) return fail("IFUNC result mismatch");
-    if (dlclose(fixture) != 0) return fail("android_dlclose", dlerror);
-    std::printf("PASS: Windows Q runtime load, TLS, IFUNC, loader APIs, and close\n");
+        if (constructor_ran() != 1) return fail("constructor did not run");
+        *tls = 5 + iteration;
+        if (tls_value(tls) != 5 + iteration) return fail("TLS value mismatch");
+        if (dependency_value() != 37) return fail("dependency relocation mismatch");
+        if (ifunc() != 42) return fail("IFUNC result mismatch");
+        if (dlclose(fixture) != 0) return fail("android_dlclose", dlerror);
+    }
+    std::printf("PASS: Windows Q runtime load, repeated lifetime, TLS, IFUNC, loader APIs, and close\n");
     return 0;
 }
