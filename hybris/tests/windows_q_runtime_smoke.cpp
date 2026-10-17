@@ -85,6 +85,10 @@ int main(int argc, char** argv) {
 
     std::printf("[4] loading fixture repeatedly: %s\n", argv[2]);
     std::fflush(stdout);
+    if (dlopen("libhybris_missing_fixture.so", 2 /* RTLD_NOW */) != nullptr) {
+        return fail("missing dependency unexpectedly loaded");
+    }
+    if (dlerror() == nullptr) return fail("missing dependency did not report an error");
     for (int iteration = 0; iteration < 8; ++iteration) {
         void* fixture = dlopen(argv[2], 2 /* RTLD_NOW */);
         if (fixture == nullptr) return fail("android_dlopen", dlerror);
