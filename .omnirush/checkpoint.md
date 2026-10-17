@@ -1,9 +1,11 @@
 # Engineering checkpoint
 
-- Current commit: `07c422b test: expand ABI thunk regression coverage`
+- Checkpoint baseline commit: `07c422b test: expand ABI thunk regression coverage`
 - Branch: `master`
 - Remote: `origin/master` at `efab890`; local branch is ahead by 11 commits.
 - Working tree at checkpoint creation: clean after ABI regression coverage.
+- Follow-up commits: `f949982` reconciled verification docs; `7d464e8` made the
+  temporary test-binary directory deterministic and stale-binary safe.
 - Active task: continue final cross-platform verification, ABI boundary review,
   and the guest static/initial-exec TLS design needed for real Android libraries.
 - Linux baseline and post-change tests: local and Docker `make test` both pass,
