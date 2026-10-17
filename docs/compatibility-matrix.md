@@ -31,7 +31,9 @@ Status values: `VERIFIED`, `TESTED`, `PARTIAL`, `UNSUPPORTED`, and `BLOCKED`.
 | JNI / ART | BLOCKED | Requires ART/JNI runtime and Android framework dependencies |
 | Binder | BLOCKED | Requires Binder transport and Android services |
 | Graphics / media / HAL providers | BLOCKED | Requires target-specific external providers |
-| Real Android `libm.so` load and `cos` lookup on Linux | VERIFIED | Emulator API 35 x86-64 rootfs |
+| Real Android `libm.so` load and `cos(0)` execution on Linux | VERIFIED | Emulator API 35 x86-64 rootfs |
+| Real Android `libz.so` load and `crc32("hello")` execution on Linux | VERIFIED | Emulator API 35 x86-64 rootfs |
+| Repeated Q fixture load/unload lifetime | VERIFIED | Native Windows 8-iteration smoke |
 | Real Android `libc.so` Windows execution | BLOCKED | Requires guest static TLS access support |
 
 The matrix is intentionally conservative: parsing a library or resolving one

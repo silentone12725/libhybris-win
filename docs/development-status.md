@@ -13,6 +13,7 @@
   initialization through the native Windows FLS backend.
 - Native Windows Q smoke coverage for `dladdr`, `dlvsym` failure behavior, and
   `dl_iterate_phdr`.
+- Native Windows repeated eight-cycle fixture load/unload stress coverage.
 
 ## TESTED / PARTIAL
 
