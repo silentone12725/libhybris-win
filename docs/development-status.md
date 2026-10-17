@@ -14,11 +14,14 @@
 - Native Windows Q smoke coverage for `dladdr`, `dlvsym` failure behavior, and
   `dl_iterate_phdr`.
 - Native Windows repeated eight-cycle fixture load/unload stress coverage.
+- ABI thunk regression coverage for mixed scalar arguments, pair returns,
+  callbacks, and repeated stack-preservation checks.
 
 ## TESTED / PARTIAL
 
 - Windows FLS-backed guest TLS.
-- Typed SysV/Microsoft x64 ABI thunk surface.
+- Typed SysV/Microsoft x64 ABI thunk surface; direct stack-passed arguments and
+  asynchronous callbacks remain outside the current public API.
 - Symbol versioning and namespace/search-path implementation.
 - `dladdr`, `dlvsym`, and `dl_iterate_phdr` internal paths; public Windows
   end-to-end coverage is incomplete.
@@ -32,8 +35,8 @@
 
 ## IN_PROGRESS
 
-- Compile and inspect NDK-generated TLSDESC fixtures.
-- Add priority dynamic-loader stress and namespace coverage.
+- Restore emulator artifacts and capture complete final cross-platform logs.
+- Design guest static/initial-exec TLS access for prebuilt Android libraries.
 
 ## BLOCKED OR UNSUPPORTED
 
@@ -44,9 +47,11 @@
 
 ## Next verified work
 
-1. Convert SLEB128 and APS2 decoding to checked, non-fatal error propagation.
-2. Add compiled TLSGD/TLSLD/TLSDESC fixtures and determine the safe Windows
-   execution transformation.
-3. Add API and stress coverage for the priority dynamic-loader surface.
-4. Exercise additional real emulator libraries through native Windows where
-   their dependency and TLS requirements fit the declared boundary.
+1. Restore the missing emulator rootfs and rerun the real `libm.so`/`libz.so`
+   operation evidence.
+2. Capture the complete native Windows output after the latest error-path and
+   ABI changes.
+3. Determine whether a safe guest static/initial-exec TLS transformation can
+   support prebuilt Android `libc.so`; otherwise preserve the explicit block.
+4. Add namespace/search-path and partial-load cleanup cases where the existing
+   Q API can exercise them without redesign.

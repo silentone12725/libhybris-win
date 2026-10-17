@@ -11,9 +11,9 @@ Statuses: `NOT_STARTED`, `IN_PROGRESS`, `BLOCKED`, `IMPLEMENTED`, `TESTED`,
 | ENG-004 | Implement remaining TLS relocation models | NDK fixture generation; guest TLS design | Native Windows TLSGD/TLSLD fixture smoke passes; TLSDESC remains | TESTED |
 | ENG-005 | Decide and implement safe prebuilt IE/LE TLS execution | Windows TLS design | Native Windows real `libc.so` failure is reproduced | BLOCKED |
 | ENG-006 | Complete priority dynamic-loader API tests | Q API internals | Native Windows fixture covers `dladdr`, `dlvsym` missing-symbol path, and `dl_iterate_phdr` | TESTED |
-| ENG-007 | Expand ABI bridge coverage | Signature definition | Current typed thunk tests | NOT_STARTED |
+| ENG-007 | Expand ABI bridge coverage | Signature definition | Typed thunk tests cover mixed scalar arguments, pair returns, callbacks, and repeated stack-preservation checks; public API has no >4-argument signature | TESTED |
 | ENG-008 | Exercise additional real Android libraries | Dependency-compatible artifacts | Linux emulator smoke executes `libm.so:cos` and `libz.so:crc32` | TESTED |
-| ENG-009 | Windows stress/error audit | Core APIs and fixtures | Native Windows 8-cycle Q fixture load/unload smoke | TESTED |
+| ENG-009 | Windows stress/error audit | Core APIs and fixtures | Native Windows 8-cycle Q fixture load/unload smoke; missing-library failure path checked | TESTED |
 | ENG-010 | Final cross-platform verification and documentation reconciliation | ENG-003..ENG-009 | Commands in `docs/build-and-test.md` | NOT_STARTED |
 
 ## Evidence rule

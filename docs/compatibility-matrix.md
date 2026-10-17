@@ -23,7 +23,7 @@ Status values: `VERIFIED`, `TESTED`, `PARTIAL`, `UNSUPPORTED`, and `BLOCKED`.
 | `dlvsym` | TESTED | Native Windows Q fixture exercises missing-symbol failure path; versioned-symbol semantics remain limited |
 | `dl_iterate_phdr` | VERIFIED | Native Windows Q fixture enumerates loaded program headers |
 | Namespaces and search paths | TESTED | Q source and fixture path coverage; broader graph coverage pending |
-| Typed SysV/Microsoft x64 calls | TESTED | ABI thunk regression suite and Q exports |
+| Typed SysV/Microsoft x64 calls | TESTED | ABI thunk suite covers mixed scalars, pair returns, callbacks, and repeated stack-preservation checks; >4-argument stack placement is not exposed |
 | Arbitrary variadic forwarding | UNSUPPORTED | No safe generic bridge |
 | Windows FLS guest TLS backend | VERIFIED | Backend unit tests and Q runtime fixture |
 | Bionic properties on Windows | TESTED | Environment-backed implementation |
@@ -33,7 +33,7 @@ Status values: `VERIFIED`, `TESTED`, `PARTIAL`, `UNSUPPORTED`, and `BLOCKED`.
 | Graphics / media / HAL providers | BLOCKED | Requires target-specific external providers |
 | Real Android `libm.so` load and `cos(0)` execution on Linux | VERIFIED | Emulator API 35 x86-64 rootfs |
 | Real Android `libz.so` load and `crc32("hello")` execution on Linux | VERIFIED | Emulator API 35 x86-64 rootfs |
-| Repeated Q fixture load/unload lifetime | VERIFIED | Native Windows 8-iteration smoke |
+| Repeated Q fixture load/unload lifetime | VERIFIED | Native Windows 8-iteration smoke and missing-library failure cleanup |
 | Real Android `libc.so` Windows execution | BLOCKED | Requires guest static TLS access support |
 
 The matrix is intentionally conservative: parsing a library or resolving one
