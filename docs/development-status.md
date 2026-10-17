@@ -11,6 +11,8 @@
 - GOTPCREL-family relocation coverage and Windows ELF version-field layout.
 - NDK-generated x86-64 TLSGD/TLSLD fixtures, including two-thread isolation and
   initialization through the native Windows FLS backend.
+- NDK-generated x86-64 initial-exec fixture execution through the synthetic
+  guest static-TLS block, including two-thread isolation.
 - Native Windows Q smoke coverage for `dladdr`, `dlvsym` failure behavior, and
   `dl_iterate_phdr`.
 - Native Windows repeated eight-cycle fixture load/unload stress coverage.
@@ -20,6 +22,8 @@
 ## TESTED / PARTIAL
 
 - Windows FLS-backed guest TLS.
+- Synthetic static/initial-exec TLS and canonical NDK `%fs` access rewriting;
+  broader prebuilt-library instruction coverage remains incomplete.
 - Typed SysV/Microsoft x64 ABI thunk surface; direct stack-passed arguments and
   asynchronous callbacks remain outside the current public API.
 - Symbol versioning and namespace/search-path implementation.
@@ -39,14 +43,16 @@
 
 ## BLOCKED OR UNSUPPORTED
 
-- Prebuilt Android initial-image static/IE TLS execution on native Windows.
+- Full prebuilt Android initial-image static/IE TLS execution on native Windows.
 - Complete TLSGD, TLSLD, and TLSDESC execution.
 - Generic variadic ABI forwarding.
 - JNI/ART, Binder, graphics, media, and HAL service integrations.
 
 ## Next verified work
 
-1. Determine whether a safe guest static/initial-exec TLS transformation can
-   support prebuilt Android `libc.so`; otherwise preserve the explicit block.
+1. Extend the verified guest static/initial-exec transformation with a complete
+   x86-64 instruction decoder and safe patch-window handling for prebuilt
+   Android `libc.so`; preserve the explicit failure boundary for unsupported
+   forms.
 2. Add namespace/search-path and partial-load cleanup cases where the existing
    Q API can exercise them without redesign.

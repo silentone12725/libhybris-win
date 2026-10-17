@@ -18,6 +18,9 @@ typedef void (*TlsDestructor)(void* block, size_t size);
 
 struct TlsModule {
   size_t module_id;
+  // SIZE_MAX means that this module uses the dynamic allocation path.  Static
+  // modules are placed in the synthetic guest TLS block at this offset.
+  size_t static_offset;
   const void* init_ptr;
   size_t init_size;
   size_t size;
@@ -37,6 +40,11 @@ struct TlsBackend;
 struct TlsContext;
 
 TlsBackend* backend_create();
+
+// Configure the synthetic guest TLS address space.  This is deliberately
+// independent of the host FS/GS bases; guest code that needs a thread pointer
+// is rewritten to use the accessors below.
+bool backend_set_static_layout(TlsBackend* backend, size_t size, size_t tp_offset);
 
 // Returns false when a context still exists. Callers must detach and destroy
 // every context before destroying its backend.
@@ -68,5 +76,8 @@ bool context_detach(TlsBackend* backend);
 // initializing that module's block on first use. Returns nullptr for an
 // unknown module, an unattached thread, or an out-of-range offset.
 void* get_addr(TlsBackend* backend, const TlsIndex& index);
+
+void* get_static_addr(TlsBackend* backend, const TlsIndex& index);
+void* guest_thread_pointer(TlsBackend* backend);
 
 }  // namespace q_tls

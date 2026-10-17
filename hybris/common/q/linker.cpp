@@ -70,6 +70,9 @@
 #include "linker_relocs.h"
 #include "linker_reloc_iterators.h"
 #include "linker_tls.h"
+#if defined(_WIN32) && defined(__x86_64__)
+#include "x86_64_guest_tls_rewriter.h"
+#endif
 #include "linker_utils.h"
 
 #if defined(_WIN32)
@@ -3107,7 +3110,11 @@ static bool is_tls_reloc(ElfW(Word) type) {
 template<typename ElfRelIteratorT>
 bool soinfo::relocate(const VersionTracker& version_tracker, ElfRelIteratorT&& rel_iterator,
                       const soinfo_list_t& global_group, const soinfo_list_t& local_group) {
+#if defined(_WIN32)
+  const size_t tls_tp_base = __libc_shared_globals()->static_tls_layout.offset_thread_pointer();
+#else
   const size_t tls_tp_base = 0/*__libc_shared_globals()->static_tls_layout.offset_thread_pointer()*/;
+#endif
   std::vector<std::pair<TlsDescriptor*, size_t>> deferred_tlsdesc_relocs;
 
   for (size_t idx = 0; rel_iterator.has_next(); ++idx) {
@@ -4318,6 +4325,15 @@ bool soinfo::link_image(const soinfo_list_t& global_group, const soinfo_list_t& 
 #endif
 
   DEBUG("[ finished linking %s ]", get_realpath());
+
+#if defined(_WIN32) && defined(__x86_64__)
+  if (!rewrite_x86_64_guest_tls(phdr, phnum, load_bias, get_tls() == nullptr
+                                                         ? 0 : get_tls()->module_id)) {
+    DL_ERR("unsupported or unrewritable x86-64 guest static TLS access in \"%s\"",
+           get_realpath());
+    return false;
+  }
+#endif
 
 #if !defined(__LP64__)
   if (has_text_relocations) {

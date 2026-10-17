@@ -7,10 +7,10 @@ Status values: `VERIFIED`, `TESTED`, `PARTIAL`, `UNSUPPORTED`, and `BLOCKED`.
 | ELF64 x86-64 header validation | VERIFIED | Windows ELF reader against emulator `libc.so` |
 | PT_LOAD reservation and protection | VERIFIED | `build-and-test-windows.sh` |
 | PT_TLS discovery and dynamic guest blocks | TESTED | Windows TLS backend tests and Q fixture |
-| Static/initial-exec TLS in prebuilt Windows-loaded ELF | PARTIAL | Rejected explicitly; Android `libc.so` requires this path |
+| Static/initial-exec TLS in prebuilt Windows-loaded ELF | PARTIAL | Synthetic guest TLS and canonical NDK IE rewrite pass; real Android `libc.so` still has unrewritable sequences |
 | `R_X86_64_RELATIVE`, absolute, PC-relative, PLT | VERIFIED | `x86_64_relocation_test` and Q runtime fixture |
 | GOTPCREL/GOTPCRELX/REX_GOTPCRELX | VERIFIED | Linux and native Windows relocation tests |
-| `R_X86_64_GOTTPOFF` arithmetic | TESTED | Primitive tests; executable IE guest access remains incomplete |
+| `R_X86_64_GOTTPOFF` arithmetic | TESTED | Primitive tests; canonical executable IE guest access passes, real-library coverage remains incomplete |
 | TLSGD/TLSLD | VERIFIED | NDK-generated global/local-dynamic fixtures; native Windows two-thread smoke |
 | TLSDESC | UNSUPPORTED | No x86-64 descriptor resolver path yet |
 | Android APS2 valid streams | VERIFIED | `packed_reloc_test` and real Linux smoke |

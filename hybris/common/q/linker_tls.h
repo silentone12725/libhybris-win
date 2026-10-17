@@ -33,6 +33,11 @@
 #include "private/bionic_elf_tls.h"
 
 #if defined(_WIN32)
+#if defined(__GNUC__) || defined(__clang__)
+#define HYBRIS_SYSV_ABI __attribute__((sysv_abi))
+#else
+#define HYBRIS_SYSV_ABI
+#endif
 #include "windows_tls_backend.h"
 #endif
 
@@ -77,4 +82,7 @@ void** linker_tls_current_slots();
 bool linker_tls_attach_current_thread();
 bool linker_tls_detach_current_thread();
 void* linker_tls_get_addr(const TlsIndex* index);
+void* HYBRIS_SYSV_ABI linker_tls_get_static_addr(const TlsIndex* index);
+void* HYBRIS_SYSV_ABI linker_tls_guest_thread_pointer();
+void* HYBRIS_SYSV_ABI linker_tls_guest_addr(size_t module_id, int64_t tpoff);
 #endif

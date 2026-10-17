@@ -4,15 +4,18 @@
 
 ### Prebuilt initial-exec/static TLS on Windows
 
-The current Windows guest TLS backend allocates module blocks through FLS and
-serves dynamic `__tls_get_addr` requests. It does not provide a guest thread
-pointer for direct x86-64 `%fs` accesses. Android's initial-image `libc.so`
-contains such accesses and therefore cannot currently be executed through the
-Windows core wrapper.
+The Windows guest TLS backend allocates module blocks through FLS and also
+maintains a synthetic guest static-TLS block. The Q x86-64 loader can rewrite
+the canonical NDK initial-exec sequences used by the checked-in TLS fixture,
+including short `%fs:[register+disp]` forms, without changing host FS/GS.
+Android's initial-image `libc.so` contains additional short and complex access
+sequences that are not yet transformed safely and therefore cannot currently be
+executed through the Windows core wrapper.
 
-The loader rejects this case instead of writing an invalid Linux TPOFF value.
-The native Windows core smoke uses a dynamic-TLS fixture by default; setting
-`HYBRIS_WINDOWS_CORE_SMOKE_REAL_ANDROID=1` exposes the unsupported path.
+The loader rejects unrewritable cases instead of writing an invalid Linux TPOFF
+value. The native Windows TLS smoke now covers global-dynamic, local-dynamic,
+and initial-exec fixtures; setting `HYBRIS_WINDOWS_CORE_SMOKE_REAL_ANDROID=1`
+still exposes the unsupported real-library path.
 
 ### Missing TLS relocation models
 

@@ -104,6 +104,7 @@ static void register_tls_module(soinfo* si, size_t static_offset) {
   const TlsModule& segment = g_tls_modules[module_idx];
   q_tls::TlsModule windows_module = {
       si_tls->module_id,
+      segment.static_offset,
       segment.segment.init_ptr,
       segment.segment.init_size,
       segment.segment.size,
@@ -111,6 +112,9 @@ static void register_tls_module(soinfo* si, size_t static_offset) {
       nullptr};
   q_tls::TlsBackend* backend = get_windows_tls_backend();
   CHECK(backend != nullptr);
+  CHECK(q_tls::backend_set_static_layout(backend,
+                                        __libc_shared_globals()->static_tls_layout.size(),
+                                        __libc_shared_globals()->static_tls_layout.offset_thread_pointer()));
   CHECK(q_tls::backend_register_module(backend, windows_module));
 #endif
 }
@@ -121,7 +125,6 @@ static void unregister_tls_module(soinfo* si) {
 
   soinfo_tls* si_tls = si->get_tls();
   TlsModule& mod = g_tls_modules[__tls_module_id_to_idx(si_tls->module_id)];
-  CHECK(mod.static_offset == SIZE_MAX);
   CHECK(mod.soinfo_ptr == si);
 #if defined(_WIN32)
   q_tls::TlsBackend* backend = get_windows_tls_backend();
@@ -174,8 +177,17 @@ void register_soinfo_tls(soinfo* si) {
   }
   size_t static_offset = SIZE_MAX;
 #if defined(_WIN32)
-  // The Windows backend owns all Q PT_TLS storage dynamically. Do not expose
-  // the Linux static-TLS layout to relocation or thread setup on this path.
+  // Windows cannot repurpose host FS/GS, so this is a synthetic guest layout.
+  // It gives IE/LE relocations a stable offset and is backed by per-thread
+  // storage in windows_tls_backend.cpp.
+  StaticTlsLayout& layout = __libc_shared_globals()->static_tls_layout;
+  if (layout.offset_bionic_tcb() == SIZE_MAX) {
+    layout.reserve_exe_segment_and_tcb(nullptr, nullptr);
+    layout.reserve_bionic_tls();
+  }
+  if (!g_static_tls_finished) {
+    static_offset = layout.reserve_solib_segment(si_tls->segment);
+  }
 #else
   if (!g_static_tls_finished) {
     StaticTlsLayout& layout = __libc_shared_globals()->static_tls_layout;
@@ -232,5 +244,32 @@ void* linker_tls_get_addr(const TlsIndex* index) {
   }
   const q_tls::TlsIndex windows_index = {index->module_id, index->offset};
   return q_tls::get_addr(backend, windows_index);
+}
+
+void* HYBRIS_SYSV_ABI linker_tls_get_static_addr(const TlsIndex* index) {
+  if (index == nullptr) return nullptr;
+  q_tls::TlsBackend* backend = get_windows_tls_backend();
+  if (backend == nullptr || q_tls::context_current_or_create(backend) == nullptr) {
+    return nullptr;
+  }
+  const q_tls::TlsIndex windows_index = {index->module_id, index->offset};
+  return q_tls::get_static_addr(backend, windows_index);
+}
+
+void* HYBRIS_SYSV_ABI linker_tls_guest_thread_pointer() {
+  q_tls::TlsBackend* backend = get_windows_tls_backend();
+  return backend == nullptr ? nullptr : q_tls::guest_thread_pointer(backend);
+}
+
+void* HYBRIS_SYSV_ABI linker_tls_guest_addr(size_t module_id, int64_t tpoff) {
+  q_tls::TlsBackend* backend = get_windows_tls_backend();
+  if (backend == nullptr || q_tls::context_current_or_create(backend) == nullptr) return nullptr;
+  const TlsModule& module = get_tls_module(module_id);
+  const int64_t base = static_cast<int64_t>(module.static_offset) -
+                       static_cast<int64_t>(__libc_shared_globals()->static_tls_layout.offset_thread_pointer());
+  const int64_t offset = tpoff - base;
+  if (offset < 0 || static_cast<size_t>(offset) >= module.segment.size) return nullptr;
+  const q_tls::TlsIndex index = {module_id, static_cast<size_t>(offset)};
+  return q_tls::get_static_addr(backend, index);
 }
 #endif

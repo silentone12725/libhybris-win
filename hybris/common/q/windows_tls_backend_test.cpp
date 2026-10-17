@@ -44,11 +44,16 @@ int main() {
   assert(backend != nullptr);
 
   const unsigned char old_init[] = {0x11, 0x22, 0x33, 0x44};
-  const q_tls::TlsModule old_module = {1, old_init, sizeof(old_init), 16, 32, old_destructor};
+  const q_tls::TlsModule old_module = {1, SIZE_MAX, old_init, sizeof(old_init), 16, 32, old_destructor};
   assert(q_tls::backend_register_module(backend, old_module));
 
-  const q_tls::TlsModule invalid_alignment = {99, nullptr, 0, 8, 3, nullptr};
+  const q_tls::TlsModule invalid_alignment = {99, SIZE_MAX, nullptr, 0, 8, 3, nullptr};
   assert(!q_tls::backend_register_module(backend, invalid_alignment));
+
+  const unsigned char static_init[] = {0xa5, 0x5a};
+  assert(q_tls::backend_set_static_layout(backend, 64, 8));
+  const q_tls::TlsModule static_module = {3, 16, static_init, sizeof(static_init), 16, 8, nullptr};
+  assert(q_tls::backend_register_module(backend, static_module));
 
   q_tls::TlsContext* context = q_tls::context_create(backend);
   assert(context != nullptr);
@@ -67,6 +72,11 @@ int main() {
   for (size_t i = 4; i < 16; ++i) assert(base[i] == 0);
   assert(q_tls::get_addr(backend, q_tls::TlsIndex{1, 16}) == nullptr);
   assert(q_tls::get_addr(backend, q_tls::TlsIndex{1, 4}) == base + 4);
+  unsigned char* static_base = static_cast<unsigned char*>(
+      q_tls::get_addr(backend, q_tls::TlsIndex{3, 0}));
+  assert(static_base != nullptr && static_base[0] == 0xa5 && static_base[1] == 0x5a);
+  assert(static_base == q_tls::get_static_addr(backend, q_tls::TlsIndex{3, 0}));
+  assert(static_base == static_cast<unsigned char*>(q_tls::guest_thread_pointer(backend)) + 8);
 
   std::thread isolated_thread([&] {
     q_tls::TlsContext* thread_context = q_tls::context_current_or_create(backend);
@@ -83,10 +93,11 @@ int main() {
 
   assert(!q_tls::backend_destroy(backend));
   assert(q_tls::backend_unregister_module(backend, 1));
+  assert(q_tls::backend_unregister_module(backend, 3));
   assert(q_tls::get_addr(backend, base_index) == nullptr);
 
   const unsigned char new_init[] = {0xa1, 0xb2};
-  const q_tls::TlsModule new_module = {1, new_init, sizeof(new_init), 16, 32, new_destructor};
+  const q_tls::TlsModule new_module = {1, SIZE_MAX, new_init, sizeof(new_init), 16, 32, new_destructor};
   assert(q_tls::backend_register_module(backend, new_module));
   unsigned char* replacement =
       static_cast<unsigned char*>(q_tls::get_addr(backend, base_index));
@@ -102,7 +113,7 @@ int main() {
   assert(new_destructor_calls.load(std::memory_order_relaxed) == 1);
   assert(q_tls::backend_unregister_module(backend, 1));
 
-  const q_tls::TlsModule thread_module = {2, nullptr, 0, 8, 64, thread_destructor};
+  const q_tls::TlsModule thread_module = {2, SIZE_MAX, nullptr, 0, 8, 64, thread_destructor};
   assert(q_tls::backend_register_module(backend, thread_module));
   std::thread cleanup_thread([&] {
     assert(q_tls::context_current_or_create(backend) != nullptr);

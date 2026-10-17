@@ -42,6 +42,11 @@ integration targets and are not implied by successful ELF loading.
 
 ## TLS model
 
+The Windows Q path now pairs FLS-backed dynamic TLS with a synthetic guest
+static-TLS block. Canonical NDK global-dynamic, local-dynamic, and initial-exec
+fixtures execute on two Windows threads through that block without changing the
+Windows thread pointer or FS/GS bases.
+
 The Windows implementation supports guest dynamic TLS through the FLS backend
 and the SysV-ABI `__tls_get_addr` path. The Q linker maps that guest symbol to
 its host-safe `__hybris_tls_get_addr` implementation when resolving Android
@@ -55,6 +60,11 @@ relocations from the current FLS-only backend. The native Windows core smoke
 therefore uses the Android NDK dynamic-TLS fixture, while the real rootfs
 `libc.so` is validated by the Windows ELF reader and real Android libraries are
 loaded by the Linux reference path.
+
+The current partial implementation adds a synthetic guest static-TLS block and
+rewrites canonical NDK initial-exec access sequences. More complex prebuilt
+library sequences remain fail-closed until a complete x86-64 instruction
+decoder and patch-window implementation is available.
 
 Supporting unmodified prebuilt IE/LE code requires a guest TLS access design,
 such as a verified instruction transformation or a separate execution process;

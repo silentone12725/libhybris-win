@@ -169,6 +169,7 @@ Q_SRCS=(
     "$Q/linker_soinfo.cpp"
     "$Q/linker_tls.cpp"
     "$Q/windows_tls_backend.cpp"
+    "$Q/x86_64_guest_tls_rewriter.cpp"
     "$Q/linker_utils.cpp"
     "$Q/rt.cpp"
     "$Q/bionic/libc/bionic/bionic_elf_tls.cpp"
@@ -233,13 +234,14 @@ if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]]; then
     echo "=== Building dynamic TLS model fixtures ==="
     TLS_FIXTURE="$BUILD/android-fixture/tls"
     mkdir -p "$TLS_FIXTURE"
-    for TLS_MODEL in global-dynamic local-dynamic; do
+    for TLS_MODEL in global-dynamic local-dynamic initial-exec; do
         "$ANDROID_CLANG" --target=x86_64-linux-android29 --sysroot="$NDK_ROOT/toolchains/llvm/prebuilt/windows-x86_64/sysroot" \
             -fPIC -fno-emulated-tls -shared -nostdlib -ftls-model="$TLS_MODEL" \
             "$ROOT/fixtures/tls_models.c" -o "$TLS_FIXTURE/libtls_$TLS_MODEL.so"
     done
     echo "  -> $TLS_FIXTURE/libtls_global-dynamic.so"
     echo "  -> $TLS_FIXTURE/libtls_local-dynamic.so"
+    echo "  -> $TLS_FIXTURE/libtls_initial-exec.so"
 
     echo ""
     echo "=== Building Windows dynamic TLS model host ==="
@@ -252,8 +254,8 @@ if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]]; then
     (cd "$TLS_FIXTURE" && \
         HYBRIS_LD_LIBRARY_PATH="C:/msys64/tmp/hybris-x86_64-build/android-fixture/tls" \
         "$BUILD/windows_tls_models_smoke.exe" \
-        "/tmp/hybris-linker/q.so" \
-        "libtls_global-dynamic.so" "libtls_local-dynamic.so")
+         "/tmp/hybris-linker/q.so" \
+         "libtls_global-dynamic.so" "libtls_local-dynamic.so" "libtls_initial-exec.so")
 fi
 
 # ── Step 2: Build libhybris-core.so (public API + hooks) ──────────────────

@@ -93,6 +93,6 @@ int main(int argc, char** argv) {
         if (dlclose(handle) != 0) return fail("android_dlclose", dlerror);
     }
 
-    std::printf("PASS: Windows dynamic TLSGD/TLSLD models and thread isolation\n");
+    std::printf("PASS: Windows dynamic and initial-exec TLS models and thread isolation\n");
     return 0;
 }
