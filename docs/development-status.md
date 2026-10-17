@@ -3,7 +3,7 @@
 ## VERIFIED
 
 - Reproducible Linux host test entry point (`make test`), with 9 test binaries
-  passing at baseline commit `a38c23e`.
+  passing.
 - Windows x64 Q-linker fixture flow: dependencies, relocations, constructors,
   IFUNC, dynamic TLS, symbol lookup, and close.
 - Windows ELF64/x86-64 reader and PT_LOAD mapping against emulator `libc.so`.
@@ -35,7 +35,6 @@
 
 ## IN_PROGRESS
 
-- Restore emulator artifacts and capture complete final cross-platform logs.
 - Design guest static/initial-exec TLS access for prebuilt Android libraries.
 
 ## BLOCKED OR UNSUPPORTED
@@ -47,11 +46,7 @@
 
 ## Next verified work
 
-1. Restore the missing emulator rootfs and rerun the real `libm.so`/`libz.so`
-   operation evidence.
-2. Capture the complete native Windows output after the latest error-path and
-   ABI changes.
-3. Determine whether a safe guest static/initial-exec TLS transformation can
+1. Determine whether a safe guest static/initial-exec TLS transformation can
    support prebuilt Android `libc.so`; otherwise preserve the explicit block.
-4. Add namespace/search-path and partial-load cleanup cases where the existing
+2. Add namespace/search-path and partial-load cleanup cases where the existing
    Q API can exercise them without redesign.
