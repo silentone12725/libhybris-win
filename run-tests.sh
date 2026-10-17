@@ -7,6 +7,7 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 Q="$ROOT/hybris/common/q"
 STUB_INC="/tmp/hybris-test-inc"
 BUILD="/tmp/hybris-test-bins"
+rm -rf "$BUILD"
 mkdir -p "$STUB_INC/android-base" "$BUILD"
 
 # Stub for android-base/macros.h (block_allocator dep)
