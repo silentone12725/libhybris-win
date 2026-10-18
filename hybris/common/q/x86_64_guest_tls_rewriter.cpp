@@ -138,6 +138,7 @@ void pop_reg(std::vector<Byte>* code, unsigned reg) {
 size_t instruction_length(const Byte* p) {
   size_t i = 0;
   while (p[i] == 0x66 || p[i] == 0x67 || p[i] == 0xf2 || p[i] == 0xf3) ++i;
+  const bool rex_w = (p[i] & 0xf0) == 0x40 && (p[i] & 8) != 0;
   if ((p[i] & 0xf0) == 0x40) ++i;
   const Byte opcode = p[i++];
   if (opcode == 0x0f) {
@@ -146,6 +147,11 @@ size_t instruction_length(const Byte* p) {
     if (extended >= 0x90 && extended <= 0x9f) return i + 1;
     return 0;
   }
+  if (opcode == 0xe8 || opcode == 0xe9 || opcode == 0x68) return i + 4;
+  if (opcode == 0xeb || (opcode >= 0x70 && opcode <= 0x7f) ||
+      (opcode >= 0xe0 && opcode <= 0xe3) || opcode == 0x6a) return i + 1;
+  if (opcode >= 0xb0 && opcode <= 0xb7) return i + 1;
+  if (opcode >= 0xb8 && opcode <= 0xbf) return i + (rex_w ? 8 : 4);
   bool has_modrm = false;
   size_t immediate = 0;
   switch (opcode) {
@@ -159,6 +165,8 @@ size_t instruction_length(const Byte* p) {
       immediate = 4;
       break;
     case 0xa9:
+      return i + 4;
+    case 0x25:
       return i + 4;
     case 0x83: case 0xc1:
       has_modrm = true;
@@ -196,14 +204,12 @@ std::vector<Byte> make_stub(uintptr_t return_address, size_t module_id, const Ac
   std::vector<Byte> code;
   emit(&code, 0x9c);  // pushfq
   for (unsigned reg : kSavedRegs) {
-    if ((access.load || access.address_only) && reg == access.reg &&
-        (!access.base_relative || reg != access.base_reg)) continue;
+    if ((access.load || access.address_only) && reg == access.reg) continue;
     push_reg(&code, reg);
   }
   if (access.base_relative) push_reg(&code, access.base_reg);
   const size_t saved_count = sizeof(kSavedRegs) / sizeof(kSavedRegs[0]) -
-      ((access.load || access.address_only) &&
-       (!access.base_relative || access.reg != access.base_reg) ? 1 : 0) +
+      ((access.load || access.address_only) ? 1 : 0) +
       (access.base_relative ? 1 : 0);
   // SysV guest functions reach ordinary TLS accesses with RSP 16-byte aligned
   // after their prologue.  Add one word when the saved-register pushes leave
@@ -256,10 +262,16 @@ std::vector<Byte> make_stub(uintptr_t return_address, size_t module_id, const Ac
   if (align_stack) {
     emit(&code, 0x48); emit(&code, 0x83); emit(&code, 0xc4); emit(&code, 8);
   }
+  if (access.base_relative) {
+    if ((access.load || access.address_only) && access.reg == access.base_reg) {
+      emit(&code, 0x48); emit(&code, 0x8d); emit(&code, 0x64); emit(&code, 0x24); emit(&code, 8);
+    } else {
+      pop_reg(&code, access.base_reg);
+    }
+  }
   for (size_t i = sizeof(kSavedRegs) / sizeof(kSavedRegs[0]); i-- > 0;) {
     const unsigned reg = kSavedRegs[i];
-    if ((access.load || access.address_only) && reg == access.reg &&
-        (!access.base_relative || reg != access.base_reg)) continue;
+    if ((access.load || access.address_only) && reg == access.reg) continue;
     pop_reg(&code, reg);
   }
   emit(&code, 0x9d);  // popfq
@@ -392,7 +404,9 @@ bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
         if (!patch_site(begin + offset, access, module_id)) return false;
         offset += access.length;
       } else {
-        ++offset;
+        if (begin[offset] == 0x64) return false;
+        const size_t length = instruction_length(begin + offset);
+        offset += length == 0 ? 1 : length;
       }
     }
   }

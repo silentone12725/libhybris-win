@@ -410,6 +410,10 @@ bool ensure_static_block(TlsBackend* backend, TlsContext* context) {
 
   const size_t old_size = context->static_allocation.size;
   context->static_allocation = {replacement, required};
+  if (required >= sizeof(void*) && backend->static_tp_offset <= required - sizeof(void*)) {
+    void* guest_tp = static_cast<char*>(replacement) + backend->static_tp_offset;
+    std::memcpy(guest_tp, &guest_tp, sizeof(guest_tp));
+  }
   for (std::map<size_t, Module>::const_iterator it = backend->modules.begin();
        it != backend->modules.end(); ++it) {
     const Module& module = it->second;

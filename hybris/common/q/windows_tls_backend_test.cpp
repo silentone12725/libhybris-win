@@ -76,7 +76,9 @@ int main() {
       q_tls::get_addr(backend, q_tls::TlsIndex{3, 0}));
   assert(static_base != nullptr && static_base[0] == 0xa5 && static_base[1] == 0x5a);
   assert(static_base == q_tls::get_static_addr(backend, q_tls::TlsIndex{3, 0}));
-  assert(static_base == static_cast<unsigned char*>(q_tls::guest_thread_pointer(backend)) + 8);
+  void* guest_tp = q_tls::guest_thread_pointer(backend);
+  assert(static_base == static_cast<unsigned char*>(guest_tp) + 8);
+  assert(*static_cast<void**>(guest_tp) == guest_tp);
 
   std::thread isolated_thread([&] {
     q_tls::TlsContext* thread_context = q_tls::context_current_or_create(backend);
