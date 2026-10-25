@@ -15,7 +15,7 @@
 
 /* ── pthread_atfork ──────────────────────────────────────────────────────────*/
 /* fork() does not exist on Windows; atfork handlers are never needed. */
-static int _hybris_win32_pthread_atfork(void (*prepare)(void),
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_atfork(void (*prepare)(void),
                                          void (*parent)(void),
                                          void (*child)(void))
 {
@@ -24,92 +24,92 @@ static int _hybris_win32_pthread_atfork(void (*prepare)(void),
 }
 
 /* ── pthread lifecycle ───────────────────────────────────────────────────────*/
-static void _hybris_win32_pthread_exit(void *retval)
+static __attribute__((sysv_abi)) void _hybris_win32_pthread_exit(void *retval)
 {
     pthread_exit(retval);
 }
 
-static int _hybris_win32_pthread_join(pthread_t thread, void **retval)
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_join(pthread_t thread, void **retval)
 {
     return pthread_join(thread, retval);
 }
 
-static int _hybris_win32_pthread_detach(pthread_t thread)
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_detach(pthread_t thread)
 {
     return pthread_detach(thread);
 }
 
-static pthread_t _hybris_win32_pthread_self(void)
+static __attribute__((sysv_abi)) pthread_t _hybris_win32_pthread_self(void)
 {
     return pthread_self();
 }
 
-static int _hybris_win32_pthread_equal(pthread_t t1, pthread_t t2)
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_equal(pthread_t t1, pthread_t t2)
 {
     return pthread_equal(t1, t2);
 }
 
-static int _hybris_win32_pthread_once(pthread_once_t *once_control,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_once(pthread_once_t *once_control,
                                        void (*init_routine)(void))
 {
     return pthread_once(once_control, init_routine);
 }
 
 /* ── pthread key ─────────────────────────────────────────────────────────────*/
-static int _hybris_win32_pthread_key_create(pthread_key_t *key,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_key_create(pthread_key_t *key,
                                              void (*destructor)(void *))
 {
     return pthread_key_create(key, destructor);
 }
 
-static int _hybris_win32_pthread_key_delete(pthread_key_t key)
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_key_delete(pthread_key_t key)
 {
     return pthread_key_delete(key);
 }
 
-static int _hybris_win32_pthread_setspecific(pthread_key_t key,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_setspecific(pthread_key_t key,
                                               const void *value)
 {
     return pthread_setspecific(key, value);
 }
 
 /* ── pthread sched ───────────────────────────────────────────────────────────*/
-static int _hybris_win32_pthread_getschedparam(pthread_t thread, int *policy,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_getschedparam(pthread_t thread, int *policy,
                                                 struct sched_param *param)
 {
     return pthread_getschedparam(thread, policy, param);
 }
 
-static int _hybris_win32_pthread_setschedparam(pthread_t thread, int policy,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_setschedparam(pthread_t thread, int policy,
                                                 const struct sched_param *param)
 {
     return pthread_setschedparam(thread, policy, param);
 }
 
 /* ── pthread_mutexattr ───────────────────────────────────────────────────────*/
-static int _hybris_win32_pthread_mutexattr_init(pthread_mutexattr_t *attr)
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_mutexattr_init(pthread_mutexattr_t *attr)
 {
     return pthread_mutexattr_init(attr);
 }
 
-static int _hybris_win32_pthread_mutexattr_destroy(pthread_mutexattr_t *attr)
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_mutexattr_destroy(pthread_mutexattr_t *attr)
 {
     return pthread_mutexattr_destroy(attr);
 }
 
-static int _hybris_win32_pthread_mutexattr_gettype(const pthread_mutexattr_t *attr,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_mutexattr_gettype(const pthread_mutexattr_t *attr,
                                                     int *kind)
 {
     return pthread_mutexattr_gettype(attr, kind);
 }
 
-static int _hybris_win32_pthread_mutexattr_settype(pthread_mutexattr_t *attr,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_mutexattr_settype(pthread_mutexattr_t *attr,
                                                     int kind)
 {
     return pthread_mutexattr_settype(attr, kind);
 }
 
-static int _hybris_win32_pthread_mutexattr_getpshared(const pthread_mutexattr_t *attr,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_mutexattr_getpshared(const pthread_mutexattr_t *attr,
                                                        int *pshared)
 {
     (void)attr;
@@ -117,14 +117,14 @@ static int _hybris_win32_pthread_mutexattr_getpshared(const pthread_mutexattr_t 
     return 0;
 }
 
-static int _hybris_win32_pthread_mutexattr_setpshared(pthread_mutexattr_t *attr,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_mutexattr_setpshared(pthread_mutexattr_t *attr,
                                                        int pshared)
 {
     (void)attr; (void)pshared;
     return 0;
 }
 
-static int _hybris_win32_pthread_mutexattr_getprotocol(const pthread_mutexattr_t *attr,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_mutexattr_getprotocol(const pthread_mutexattr_t *attr,
                                                         int *protocol)
 {
     (void)attr;
@@ -132,7 +132,7 @@ static int _hybris_win32_pthread_mutexattr_getprotocol(const pthread_mutexattr_t
     return 0;
 }
 
-static int _hybris_win32_pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr,
                                                         int protocol)
 {
     (void)attr; (void)protocol;
@@ -140,17 +140,17 @@ static int _hybris_win32_pthread_mutexattr_setprotocol(pthread_mutexattr_t *attr
 }
 
 /* ── pthread_condattr ────────────────────────────────────────────────────────*/
-static int _hybris_win32_pthread_condattr_init(pthread_condattr_t *attr)
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_condattr_init(pthread_condattr_t *attr)
 {
     return pthread_condattr_init(attr);
 }
 
-static int _hybris_win32_pthread_condattr_destroy(pthread_condattr_t *attr)
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_condattr_destroy(pthread_condattr_t *attr)
 {
     return pthread_condattr_destroy(attr);
 }
 
-static int _hybris_win32_pthread_condattr_getpshared(const pthread_condattr_t *attr,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_condattr_getpshared(const pthread_condattr_t *attr,
                                                       int *pshared)
 {
     (void)attr;
@@ -158,14 +158,14 @@ static int _hybris_win32_pthread_condattr_getpshared(const pthread_condattr_t *a
     return 0;
 }
 
-static int _hybris_win32_pthread_condattr_setpshared(pthread_condattr_t *attr,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_condattr_setpshared(pthread_condattr_t *attr,
                                                       int pshared)
 {
     (void)attr; (void)pshared;
     return 0;
 }
 
-static int _hybris_win32_pthread_condattr_getclock(const pthread_condattr_t *attr,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_condattr_getclock(const pthread_condattr_t *attr,
                                                     clockid_t *clock_id)
 {
 #if defined(PTHREAD_COND_INITIALIZER) && defined(_POSIX_TIMEOUTS)
@@ -177,7 +177,7 @@ static int _hybris_win32_pthread_condattr_getclock(const pthread_condattr_t *att
 #endif
 }
 
-static int _hybris_win32_pthread_condattr_setclock(pthread_condattr_t *attr,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_condattr_setclock(pthread_condattr_t *attr,
                                                     clockid_t clock_id)
 {
 #if defined(PTHREAD_COND_INITIALIZER) && defined(_POSIX_TIMEOUTS)
@@ -189,7 +189,7 @@ static int _hybris_win32_pthread_condattr_setclock(pthread_condattr_t *attr,
 }
 
 /* ── pthread_getname_np ──────────────────────────────────────────────────────*/
-static int _hybris_win32_pthread_getname_np(pthread_t thread, char *buf,
+static __attribute__((sysv_abi)) int _hybris_win32_pthread_getname_np(pthread_t thread, char *buf,
                                              size_t buflen)
 {
     (void)thread;
