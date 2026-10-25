@@ -768,8 +768,19 @@ bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
           at_known_boundary = false;
           offset++;
         } else {
+          const Byte op0 = begin[offset + (((begin[offset] & 0xf0) == 0x40) ? 1 : 0)];
           at_known_boundary = true;
           offset += length;
+          // After an unconditional transfer (jmp rel8/rel32, ret) the bytes up
+          // to the next instruction are alignment padding (0x00 or 0xcc int3).
+          // A linear sweep would otherwise decode 0x00 as "add [mem],reg" and
+          // swallow a following fs: access (e.g. "mov rax,fs:[0]"), leaving it
+          // unrewritten. Skip the padding so the sweep re-syncs to real code.
+          if (op0 == 0xe9 || op0 == 0xeb || op0 == 0xc3 || op0 == 0xc2) {
+            while (offset + 8 <= end_offset &&
+                   (begin[offset] == 0x00 || begin[offset] == 0xcc))
+              offset++;
+          }
         }
       }
     }
