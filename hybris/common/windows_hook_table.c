@@ -82,7 +82,7 @@ static int __attribute__((sysv_abi)) _bionic_pthread_once(volatile int32_t *once
     for (;;) {
         old = 0;
         if (__atomic_compare_exchange_n(once, &old, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
-            ((void (*)(void) __attribute__((sysv_abi)))fn)();
+            ((void (__attribute__((sysv_abi)) *)(void))fn)();
             __atomic_store_n(once, 2, __ATOMIC_RELEASE);
             return 0;
         }
