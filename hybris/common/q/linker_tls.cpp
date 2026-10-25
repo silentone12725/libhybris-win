@@ -171,6 +171,27 @@ void linker_finalize_static_tls() {
 }
 
 void register_soinfo_tls(soinfo* si) {
+#if defined(_WIN32)
+  // The Apple Android libraries carry no PT_TLS of their own, yet their
+  // initial-exec fs: accesses read the bionic TCB slots (errno, stack guard,
+  // thread self, ...). The TCB must therefore exist and be published to the
+  // Windows TLS backend even when no library contributes a TLS segment. The
+  // standalone linker does this in linker_setup_exe_static_tls, which the
+  // in-process hybris host never runs, so ensure it once here before the
+  // no-TLS early return below. Guarded by offset_bionic_tcb(), so it runs once.
+  {
+    StaticTlsLayout& base_layout = __libc_shared_globals()->static_tls_layout;
+    if (base_layout.offset_bionic_tcb() == SIZE_MAX) {
+      base_layout.reserve_exe_segment_and_tcb(nullptr, nullptr);
+      base_layout.reserve_bionic_tls();
+      q_tls::TlsBackend* base_backend = get_windows_tls_backend();
+      if (base_backend != nullptr) {
+        q_tls::backend_set_static_layout(base_backend, base_layout.size(),
+                                         base_layout.offset_thread_pointer());
+      }
+    }
+  }
+#endif
   soinfo_tls* si_tls = si->get_tls();
   if (si_tls == nullptr || si_tls->module_id != kTlsUninitializedModuleId) {
     return;

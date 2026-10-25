@@ -16,9 +16,12 @@
 #if defined(_WIN32)
 #include <windows.h>
 #include <malloc.h>
+#include <stdio.h>
+#include <stdlib.h>
 #else
 #include <pthread.h>
 #include <stdlib.h>
+#include <stdio.h>
 #endif
 
 namespace q_tls {
@@ -252,11 +255,19 @@ bool backend_register_module(TlsBackend* backend, const TlsModule& module) {
 }
 
 bool backend_set_static_layout(TlsBackend* backend, size_t size, size_t tp_offset) {
-  if (backend == nullptr || tp_offset > size) return false;
+  if (backend == nullptr || tp_offset > size) {
+    if (std::getenv("ADAM_CTOR_DEBUG"))
+      fprintf(stderr, "[tls] backend_set_static_layout REJECT backend=%p size=%zu tp_offset=%zu\n",
+              static_cast<void*>(backend), size, tp_offset);
+    return false;
+  }
   std::lock_guard<std::mutex> lock(backend->modules_lock);
   if (size < backend->static_size) return false;
   backend->static_size = size;
   backend->static_tp_offset = tp_offset;
+  if (std::getenv("ADAM_CTOR_DEBUG"))
+    fprintf(stderr, "[tls] backend_set_static_layout OK backend=%p size=%zu tp_offset=%zu\n",
+            static_cast<void*>(backend), size, tp_offset);
   return true;
 }
 
@@ -392,7 +403,12 @@ namespace {
 
 bool ensure_static_block(TlsBackend* backend, TlsContext* context) {
   std::lock_guard<std::mutex> modules_lock(backend->modules_lock);
-  if (backend->static_tp_offset == SIZE_MAX) return false;
+  if (backend->static_tp_offset == SIZE_MAX) {
+    if (std::getenv("ADAM_CTOR_DEBUG"))
+      fprintf(stderr, "[tls] ensure_static_block: backend=%p static_tp_offset=SIZE_MAX static_size=%zu (layout not pushed)\n",
+              static_cast<void*>(backend), backend->static_size);
+    return false;
+  }
   const size_t required = backend->static_size == 0 ? 1 : backend->static_size;
   if (context->static_allocation.size >= required) return true;
 
@@ -459,12 +475,25 @@ void* get_static_addr(TlsBackend* backend, const TlsIndex& index) {
 }
 
 void* guest_thread_pointer(TlsBackend* backend) {
-  if (backend == nullptr) return nullptr;
+  const bool dbg = std::getenv("ADAM_CTOR_DEBUG") != nullptr;
+  if (backend == nullptr) {
+    if (dbg) fprintf(stderr, "[tls] guest_thread_pointer: backend==null\n");
+    return nullptr;
+  }
   TlsContext* context = context_current_or_create(backend);
-  if (context == nullptr) return nullptr;
+  if (context == nullptr) {
+    if (dbg) fprintf(stderr, "[tls] guest_thread_pointer: context_current_or_create==null\n");
+    return nullptr;
+  }
   std::lock_guard<std::mutex> lock(context->allocations_lock);
-  if (!ensure_static_block(backend, context)) return nullptr;
-  return static_cast<char*>(context->static_allocation.block) + backend->static_tp_offset;
+  if (!ensure_static_block(backend, context)) {
+    if (dbg) fprintf(stderr, "[tls] guest_thread_pointer: ensure_static_block failed\n");
+    return nullptr;
+  }
+  void* tp = static_cast<char*>(context->static_allocation.block) + backend->static_tp_offset;
+  if (dbg) fprintf(stderr, "[tls] guest_thread_pointer: ok block=%p tp_off=0x%zx -> %p\n",
+                   context->static_allocation.block, backend->static_tp_offset, tp);
+  return tp;
 }
 
 }  // namespace q_tls
