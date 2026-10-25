@@ -99,10 +99,7 @@
 #include <sys/uio.h>
 #endif
 
-#if defined(_WIN32)
-/* The Q linker supplies the Windows VirtualAlloc/VirtualFree shim. */
-#include <sys/mman.h>
-#else
+#if !defined(_WIN32)
 #include <sys/mman.h>
 #endif
 #include <libgen.h>
@@ -220,9 +217,16 @@ void * (*_android_shared_globals)() = NULL;
  * function pointer. Explicit Windows implementations use HOOK_TO below. */
 #define HOOK_DIRECT(symbol) {#symbol, NULL, NULL}
 #define HOOK_DIRECT_NO_DEBUG(symbol) {#symbol, NULL, NULL}
+/* HOOK_WIN32: binds to a _hybris_win32_<symbol> wrapper defined in
+ * hooks_win32.c (included below). Used to override NULL entries for symbols
+ * that exist in MinGW winpthread but not in UCRT/glibc directly. */
+#define HOOK_WIN32(symbol) HOOK_TO(symbol, _hybris_win32_##symbol)
+/* Include Windows-specific wrapper implementations (static functions). */
+#include "hooks_win32.c"
 #else
 #define HOOK_DIRECT(symbol) {#symbol, symbol, _hybris_hook_##symbol}
 #define HOOK_DIRECT_NO_DEBUG(symbol) {#symbol, symbol, symbol}
+#define HOOK_WIN32(symbol) HOOK_DIRECT_NO_DEBUG(symbol)
 #endif
 
 /*
@@ -3254,16 +3258,16 @@ static struct _hook hooks_common[] = {
 #endif
      HOOK_INDIRECT(gettid),
     HOOK_DIRECT_NO_DEBUG(getpid),
-    HOOK_DIRECT_NO_DEBUG(pthread_atfork),
+    HOOK_WIN32(pthread_atfork),
     HOOK_INDIRECT(pthread_create),
     HOOK_INDIRECT(pthread_kill),
-    HOOK_DIRECT_NO_DEBUG(pthread_exit),
-    HOOK_DIRECT_NO_DEBUG(pthread_join),
-    HOOK_DIRECT_NO_DEBUG(pthread_detach),
-    HOOK_DIRECT_NO_DEBUG(pthread_self),
-    HOOK_DIRECT_NO_DEBUG(pthread_equal),
-    HOOK_DIRECT_NO_DEBUG(pthread_getschedparam),
-    HOOK_DIRECT_NO_DEBUG(pthread_setschedparam),
+    HOOK_WIN32(pthread_exit),
+    HOOK_WIN32(pthread_join),
+    HOOK_WIN32(pthread_detach),
+    HOOK_WIN32(pthread_self),
+    HOOK_WIN32(pthread_equal),
+    HOOK_WIN32(pthread_getschedparam),
+    HOOK_WIN32(pthread_setschedparam),
     HOOK_INDIRECT(pthread_mutex_init),
     HOOK_INDIRECT(pthread_mutex_destroy),
     HOOK_INDIRECT(pthread_mutex_lock),
@@ -3271,20 +3275,20 @@ static struct _hook hooks_common[] = {
     HOOK_INDIRECT(pthread_mutex_trylock),
     HOOK_INDIRECT(pthread_mutex_lock_timeout_np),
     HOOK_INDIRECT(pthread_mutex_timedlock),
-    HOOK_DIRECT_NO_DEBUG(pthread_mutexattr_init),
-    HOOK_DIRECT_NO_DEBUG(pthread_mutexattr_destroy),
-    HOOK_DIRECT_NO_DEBUG(pthread_mutexattr_gettype),
-    HOOK_DIRECT_NO_DEBUG(pthread_mutexattr_settype),
-    HOOK_DIRECT_NO_DEBUG(pthread_mutexattr_getpshared),
-    HOOK_DIRECT_NO_DEBUG(pthread_mutexattr_getprotocol),
-    HOOK_DIRECT_NO_DEBUG(pthread_mutexattr_setprotocol),
-    HOOK_DIRECT(pthread_mutexattr_setpshared),
-    HOOK_DIRECT_NO_DEBUG(pthread_condattr_init),
-    HOOK_DIRECT_NO_DEBUG(pthread_condattr_getpshared),
-    HOOK_DIRECT_NO_DEBUG(pthread_condattr_setpshared),
-    HOOK_DIRECT_NO_DEBUG(pthread_condattr_destroy),
-    HOOK_DIRECT_NO_DEBUG(pthread_condattr_getclock),
-    HOOK_DIRECT_NO_DEBUG(pthread_condattr_setclock),
+    HOOK_WIN32(pthread_mutexattr_init),
+    HOOK_WIN32(pthread_mutexattr_destroy),
+    HOOK_WIN32(pthread_mutexattr_gettype),
+    HOOK_WIN32(pthread_mutexattr_settype),
+    HOOK_WIN32(pthread_mutexattr_getpshared),
+    HOOK_WIN32(pthread_mutexattr_getprotocol),
+    HOOK_WIN32(pthread_mutexattr_setprotocol),
+    HOOK_WIN32(pthread_mutexattr_setpshared),
+    HOOK_WIN32(pthread_condattr_init),
+    HOOK_WIN32(pthread_condattr_getpshared),
+    HOOK_WIN32(pthread_condattr_setpshared),
+    HOOK_WIN32(pthread_condattr_destroy),
+    HOOK_WIN32(pthread_condattr_getclock),
+    HOOK_WIN32(pthread_condattr_setclock),
     HOOK_INDIRECT(pthread_cond_init),
     HOOK_INDIRECT(pthread_cond_destroy),
     HOOK_INDIRECT(pthread_cond_broadcast),
@@ -3295,12 +3299,12 @@ static struct _hook hooks_common[] = {
     HOOK_TO(pthread_cond_timedwait_monotonic, _hybris_hook_pthread_cond_timedwait),
     HOOK_TO(pthread_cond_timedwait_monotonic_np, _hybris_hook_pthread_cond_timedwait),
     HOOK_INDIRECT(pthread_cond_timedwait_relative_np),
-    HOOK_DIRECT_NO_DEBUG(pthread_key_delete),
-    HOOK_DIRECT_NO_DEBUG(pthread_getname_np),
+    HOOK_WIN32(pthread_key_delete),
+    HOOK_WIN32(pthread_getname_np),
     HOOK_INDIRECT(pthread_setname_np),
-    HOOK_DIRECT_NO_DEBUG(pthread_once),
-    HOOK_DIRECT_NO_DEBUG(pthread_key_create),
-    HOOK_DIRECT(pthread_setspecific),
+    HOOK_WIN32(pthread_once),
+    HOOK_WIN32(pthread_key_create),
+    HOOK_WIN32(pthread_setspecific),
     HOOK_INDIRECT(pthread_getspecific),
     HOOK_INDIRECT(pthread_attr_init),
     HOOK_INDIRECT(pthread_attr_destroy),
@@ -4274,4 +4278,12 @@ void hybris_dlwarning(void* obj, void (*f)(void*, const char*))
 void* hybris_get_exported_namespace(const char* name)
 {
     return android_get_exported_namespace(name);
+}
+
+/* Public entry point so windows_core_hooks.c can use the full hook table
+ * as the linker init callback, while still forwarding to the user-supplied
+ * hook_callback for any symbols not in the built-in table. */
+void* hybris_get_hooked_symbol(const char *sym, const char *requester)
+{
+    return __hybris_get_hooked_symbol(sym, requester);
 }

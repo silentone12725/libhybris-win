@@ -4328,7 +4328,8 @@ bool soinfo::link_image(const soinfo_list_t& global_group, const soinfo_list_t& 
 
 #if defined(_WIN32) && defined(__x86_64__)
   if (!rewrite_x86_64_guest_tls(phdr, phnum, load_bias, get_tls() == nullptr
-                                                         ? 0 : get_tls()->module_id)) {
+                                                         ? 0 : get_tls()->module_id,
+                               get_realpath())) {
     DL_ERR("unsupported or unrewritable x86-64 guest static TLS access in \"%s\"",
            get_realpath());
     return false;

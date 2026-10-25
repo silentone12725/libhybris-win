@@ -5,9 +5,16 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <utility>
 #include <vector>
+
+#ifndef SHF_EXECINSTR
+#define SHF_EXECINSTR 0x4u
+#endif
 
 #include "linker_globals.h"
 #include "linker_tls.h"
@@ -17,6 +24,7 @@ namespace {
 using Byte = unsigned char;
 
 struct Access {
+  enum class MemoryOp { Move, And, Add, X87Da };
   size_t length;
   unsigned reg;
   unsigned base_reg;
@@ -26,6 +34,8 @@ struct Access {
   bool base_relative;
   bool tp_relative;
   int64_t tpoff;
+  MemoryOp op;
+  unsigned op_reg;
 };
 
 static bool decode(const Byte* p, Access* out) {
@@ -34,7 +44,8 @@ static bool decode(const Byte* p, Access* out) {
   Byte rex = 0;
   if ((p[i] & 0xf0) == 0x40) rex = p[i++];
   const Byte opcode = p[i++];
-  if (opcode != 0x8b && opcode != 0x89) return false;
+  if (opcode != 0x8b && opcode != 0x89 && opcode != 0x23 && opcode != 0x03)
+    return false;
   const Byte modrm = p[i++];
   const unsigned mod = modrm >> 6;
   unsigned base_reg = modrm & 7;
@@ -68,12 +79,21 @@ static bool decode(const Byte* p, Access* out) {
   out->length = i;
   out->reg = ((modrm >> 3) & 7) | ((rex & 4) != 0 ? 8 : 0);
   out->base_reg = base_reg;
-  out->load = opcode == 0x8b;
+  // 0x23 is a read-modify-write form (AND r32, r/m32), while 0x03 is the
+  // corresponding ADD r64, r/m64 form used by Android initial-exec TLS.
+  // Both still leave the destination register as the result of the access,
+  // but unlike MOV they also produce arithmetic flags that the relocated
+  // instruction must preserve.
+  out->load = opcode == 0x8b || opcode == 0x23 || opcode == 0x03;
   out->wide = (rex & 8) != 0;
   out->address_only = false;
   out->base_relative = !absolute;
   out->tp_relative = absolute;
   out->tpoff = displacement;
+  out->op = opcode == 0x23 ? Access::MemoryOp::And :
+            (opcode == 0x03 ? Access::MemoryOp::Add :
+             (opcode == 0xda ? Access::MemoryOp::X87Da : Access::MemoryOp::Move));
+  out->op_reg = (modrm >> 3) & 7;
   return true;
 }
 
@@ -88,6 +108,20 @@ void mov_imm64(std::vector<Byte>* code, unsigned reg, uint64_t value) {
   emit(code, static_cast<Byte>(0x48 | ((reg >> 3) & 1)));
   emit(code, static_cast<Byte>(0xb8 | (reg & 7)));
   emit64(code, value);
+}
+
+void call_with_dynamic_stack_alignment(std::vector<Byte>* code) {
+  // The replacement may run at any point in a guest function, so its current
+  // RSP parity is not derivable from the function prologue alone.  Align the
+  // SysV helper call at runtime and restore the exact incoming RSP afterward.
+  emit(code, 0x48); emit(code, 0xf7); emit(code, 0xc4); emit(code, 0x08);
+  emit(code, 0x00); emit(code, 0x00); emit(code, 0x00);  // test rsp, 8
+  emit(code, 0x74); emit(code, 0x0d);                   // jz no_adjust
+  emit(code, 0x48); emit(code, 0x83); emit(code, 0xec); emit(code, 0x08);
+  emit(code, 0x41); emit(code, 0xff); emit(code, 0xd3);  // call r11
+  emit(code, 0x48); emit(code, 0x83); emit(code, 0xc4); emit(code, 0x08);
+  emit(code, 0xeb); emit(code, 0x03);                   // jmp after_no_adjust
+  emit(code, 0x41); emit(code, 0xff); emit(code, 0xd3);  // no_adjust: call r11
 }
 
 void mov_reg_reg(std::vector<Byte>* code, unsigned dst, unsigned src) {
@@ -125,6 +159,39 @@ void mov_reg_memory(std::vector<Byte>* code, unsigned dst, unsigned base, bool w
   if ((base & 7) == 4) emit(code, 0x24);
 }
 
+void and_reg_memory(std::vector<Byte>* code, unsigned dst, unsigned base, bool wide) {
+  emit(code, static_cast<Byte>(0x40 | (wide ? 8 : 0) | (dst >= 8 ? 4 : 0) |
+                                     (base >= 8 ? 1 : 0)));
+  emit(code, 0x23);
+  emit(code, static_cast<Byte>(0xc0 | ((dst & 7) << 3) | (base & 7)));
+  if ((base & 7) == 4) emit(code, 0x24);
+}
+
+void add_reg_memory(std::vector<Byte>* code, unsigned dst, unsigned base, bool wide) {
+  emit(code, static_cast<Byte>(0x40 | (wide ? 8 : 0) | (dst >= 8 ? 4 : 0) |
+                                     (base >= 8 ? 1 : 0)));
+  emit(code, 0x03);
+  emit(code, static_cast<Byte>(0xc0 | ((dst & 7) << 3) | (base & 7)));
+  if ((base & 7) == 4) emit(code, 0x24);
+}
+
+void x87_da_memory(std::vector<Byte>* code, unsigned op_reg, unsigned base) {
+  emit(code, static_cast<Byte>(0x40 | (base >= 8 ? 1 : 0)));
+  emit(code, 0xda);
+  emit(code, static_cast<Byte>(((op_reg & 7) << 3) | (base & 7)));
+  if ((base & 7) == 4) emit(code, 0x24);
+}
+
+void mov_stack_disp_reg(std::vector<Byte>* code, unsigned src, int32_t displacement) {
+  // mov [rsp+disp32], src; the saved initial flags word is below the saved
+  // registers and any temporary alignment word.
+  emit(code, static_cast<Byte>(0x48 | (src >= 8 ? 4 : 0)));
+  emit(code, 0x89);
+  emit(code, static_cast<Byte>(0x80 | ((src & 7) << 3) | 4));
+  emit(code, 0x24);
+  emit32(code, static_cast<uint32_t>(displacement));
+}
+
 void push_reg(std::vector<Byte>* code, unsigned reg) {
   if (reg >= 8) emit(code, 0x41);
   emit(code, static_cast<Byte>(0x50 | (reg & 7)));
@@ -137,15 +204,35 @@ void pop_reg(std::vector<Byte>* code, unsigned reg) {
 
 size_t instruction_length(const Byte* p) {
   size_t i = 0;
-  while (p[i] == 0x66 || p[i] == 0x67 || p[i] == 0xf2 || p[i] == 0xf3) ++i;
+  while (p[i] == 0x64 || p[i] == 0x65 || p[i] == 0x66 || p[i] == 0x67 ||
+         p[i] == 0xf0 || p[i] == 0xf2 || p[i] == 0xf3) ++i;
   const bool rex_w = (p[i] & 0xf0) == 0x40 && (p[i] & 8) != 0;
   if ((p[i] & 0xf0) == 0x40) ++i;
   const Byte opcode = p[i++];
   if (opcode == 0x0f) {
     const Byte extended = p[i++];
-    if (extended >= 0x80 && extended <= 0x8f) return i + 4;
-    if (extended >= 0x90 && extended <= 0x9f) return i + 1;
-    return 0;
+    if (extended >= 0x80 && extended <= 0x8f) return i + 4;  // jcc rel32
+    // 3-byte opcode groups (SSSE3, SSE4): conservative fallback.
+    if (extended == 0x38 || extended == 0x3a) return 0;
+    // setcc, cmovcc and most SSE opcodes all have a ModRM byte.
+    const Byte modrm2 = p[i++];
+    const unsigned mod2 = modrm2 >> 6;
+    if (mod2 != 3 && (modrm2 & 7) == 4) {
+      const Byte sib2 = p[i++];
+      if (mod2 == 0 && (sib2 & 7) == 5) i += 4;
+    }
+    if (mod2 == 0 && (modrm2 & 7) == 5) i += 4;
+    if (mod2 == 1) ++i;
+    if (mod2 == 2) i += 4;
+    // Opcodes that carry an imm8 after ModRM.
+    switch (extended) {
+      case 0x70: case 0x71: case 0x72: case 0x73:
+      case 0xc2: case 0xc4: case 0xc5: case 0xc6:
+      case 0xa4: case 0xac:
+        ++i;
+        break;
+    }
+    return i;
   }
   if (opcode == 0xe8 || opcode == 0xe9 || opcode == 0x68) return i + 4;
   if (opcode == 0xeb || (opcode >= 0x70 && opcode <= 0x7f) ||
@@ -155,25 +242,44 @@ size_t instruction_length(const Byte* p) {
   bool has_modrm = false;
   size_t immediate = 0;
   switch (opcode) {
-    case 0x01: case 0x03: case 0x09: case 0x0b: case 0x21: case 0x23:
-    case 0x29: case 0x2b: case 0x31: case 0x33: case 0x39: case 0x3b:
-    case 0x8b: case 0x89: case 0x8d: case 0x85: case 0xff:
+    // Accumulator-register short forms with imm32
+    case 0x05: case 0x0d: case 0x15: case 0x1d: case 0x2d: case 0x35: case 0x3d:
+      return i + 4;
+    // Accumulator-register short forms with imm8
+    case 0x04: case 0x0c: case 0x14: case 0x1c: case 0x24: case 0x2c: case 0x34: case 0x3c:
+      return i + 1;
+    case 0x00: case 0x01: case 0x02: case 0x03:
+    case 0x08: case 0x09: case 0x0a: case 0x0b:
+    case 0x10: case 0x11: case 0x12: case 0x13:
+    case 0x18: case 0x19: case 0x1a: case 0x1b:
+    case 0x20: case 0x21: case 0x22: case 0x23:
+    case 0x28: case 0x29: case 0x2a: case 0x2b:
+    case 0x30: case 0x31: case 0x32: case 0x33:
+    case 0x38: case 0x39: case 0x3a: case 0x3b:
+    case 0x63: case 0x8b: case 0x89: case 0x8d: case 0x85: case 0xfe: case 0xff:
+       has_modrm = true;
+       break;
+    case 0x80: case 0x81: case 0xc6: case 0xc7:
       has_modrm = true;
-      break;
-    case 0x81: case 0xc7:
-      has_modrm = true;
-      immediate = 4;
+      immediate = opcode == 0x80 ? 1 : 4;
       break;
     case 0xa9:
       return i + 4;
     case 0x25:
       return i + 4;
-    case 0x83: case 0xc1:
+    case 0x83: case 0xc1: case 0xf6:
       has_modrm = true;
       immediate = 1;
       break;
-    case 0x90: case 0xc3: case 0xcc: case 0x5d:
+    case 0x6c: case 0x6d: case 0x6e: case 0x6f: case 0x99: case 0xc9: case 0xec: case 0xf1:
+    case 0x90: case 0xa4: case 0xa5: case 0xa6: case 0xa7:
+    case 0xaa: case 0xab: case 0xac: case 0xad: case 0xae: case 0xaf:
+    case 0xc3: case 0xcc: case 0x5d:
       return i;
+    case 0xd4: case 0xd5:
+      return i + 1;
+    case 0x9a:
+      return i + 6;
     default:
       if (opcode >= 0x50 && opcode <= 0x5f) return i;
       return 0;
@@ -188,6 +294,37 @@ size_t instruction_length(const Byte* p) {
   if (mod == 1) ++i;
   if (mod == 2) i += 4;
   return i + immediate;
+}
+
+size_t ignored_fs_prefix_length(const Byte* p) {
+  if (p[0] != 0x64) return 0;
+  size_t i = 1;
+  if ((p[i] & 0xf0) == 0x40) ++i;
+  const Byte opcode = p[i++];
+  const bool has_modrm =
+      opcode == 0x00 || opcode == 0x01 || opcode == 0x02 || opcode == 0x03 ||
+      opcode == 0x08 || opcode == 0x09 || opcode == 0x0a || opcode == 0x0b ||
+      opcode == 0x10 || opcode == 0x11 || opcode == 0x12 || opcode == 0x13 ||
+      opcode == 0x18 || opcode == 0x19 || opcode == 0x1a || opcode == 0x1b ||
+      opcode == 0x20 || opcode == 0x21 || opcode == 0x22 || opcode == 0x23 ||
+      opcode == 0x28 || opcode == 0x29 || opcode == 0x2a || opcode == 0x2b ||
+      opcode == 0x30 || opcode == 0x31 || opcode == 0x32 || opcode == 0x33 ||
+      opcode == 0x38 || opcode == 0x39 || opcode == 0x3a || opcode == 0x3b ||
+      opcode == 0x81 || opcode == 0x83 || opcode == 0x85 || opcode == 0x8b ||
+      opcode == 0x89 || opcode == 0x8d || opcode == 0xc1 || opcode == 0xc7 ||
+      opcode == 0xfe || opcode == 0xff;
+  if (opcode == 0x90 || opcode == 0xc3 || opcode == 0xe8 || opcode == 0xe9 ||
+      opcode == 0xeb || (opcode >= 0x70 && opcode <= 0x7f) ||
+      (opcode >= 0xe0 && opcode <= 0xe3) || opcode == 0x24 ||
+      (opcode >= 0x6c && opcode <= 0x6f) || (opcode >= 0xa4 && opcode <= 0xa7) ||
+      (opcode >= 0xaa && opcode <= 0xaf)) {
+    const size_t length = instruction_length(p + 1);
+    return length == 0 ? 0 : length + 1;
+  }
+  if (!has_modrm) return 0;
+  if ((p[i] >> 6) != 3) return 0;
+  const size_t length = instruction_length(p + 1);
+  return length == 0 ? 0 : length + 1;
 }
 
 const unsigned kSavedRegs[] = {0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
@@ -227,13 +364,13 @@ std::vector<Byte> make_stub(uintptr_t return_address, size_t module_id, const Ac
     mov_imm64(&code, 6, static_cast<uint64_t>(static_cast<int64_t>(access.tpoff)));
   }
   const unsigned store_value_reg = access.reg == 12 ? 13 : 12;
-  if (!access.load && !access.address_only) {
+  if (!access.load && !access.address_only && access.op != Access::MemoryOp::X87Da) {
     // r12/r13 are callee-saved in the SysV guest ABI, so they survive the
     // resolver call while the original source register may be call-clobbered.
     mov_reg_reg(&code, store_value_reg, access.reg);
   }
   mov_imm64(&code, 11, resolver);
-  emit(&code, 0x41); emit(&code, 0xff); emit(&code, 0xd3);  // call r11
+  call_with_dynamic_stack_alignment(&code);
 
   if (access.tp_relative && !access.base_relative) {
     emit(&code, 0x48); emit(&code, 0x8d); emit(&code, 0x80);
@@ -247,16 +384,38 @@ std::vector<Byte> make_stub(uintptr_t return_address, size_t module_id, const Ac
 
   if (access.address_only) {
     // The resolver result is already the function result in RAX.
+  } else if (access.op == Access::MemoryOp::X87Da) {
+    const unsigned address_reg = 11;
+    mov_reg_reg(&code, address_reg, 0);
+    x87_da_memory(&code, access.op_reg, address_reg);
   } else if (access.load) {
     const unsigned address_reg = access.reg == 11 ? 10 : 11;
     mov_reg_reg(&code, address_reg, 0);
-    // The direct form only uses a 32- or 64-bit destination.  Its original
-    // REX.W bit is preserved by the synthesized instruction.
-    mov_reg_memory(&code, access.reg, address_reg, access.wide);
+    if (access.op == Access::MemoryOp::And) {
+      and_reg_memory(&code, access.reg, address_reg, access.wide);
+    } else if (access.op == Access::MemoryOp::Add) {
+      add_reg_memory(&code, access.reg, address_reg, access.wide);
+    } else {
+      // The direct form only uses a 32- or 64-bit destination.  Its original
+      // REX.W bit is preserved by the synthesized instruction.
+      mov_reg_memory(&code, access.reg, address_reg, access.wide);
+    }
   } else {
     const unsigned address_reg = access.reg == 11 ? 10 : 11;
     mov_reg_reg(&code, address_reg, 0);
     mov_memory_reg(&code, address_reg, store_value_reg, access.wide);
+  }
+
+  if (access.op == Access::MemoryOp::And || access.op == Access::MemoryOp::Add) {
+    // pushfq at the start protects the guest flags while the resolver runs.
+    // Replace that saved word with the flags produced by AND before the
+    // ordinary register/stack cleanup restores it.
+    const unsigned flags_reg = access.reg == 10 ? 11 : 10;
+    emit(&code, 0x9c);  // pushfq
+    pop_reg(&code, flags_reg);
+    const int32_t flags_offset = static_cast<int32_t>(
+        8 * (saved_count + (align_stack ? 1 : 0)));
+    mov_stack_disp_reg(&code, flags_reg, flags_offset);
   }
 
   if (align_stack) {
@@ -289,13 +448,22 @@ bool patch_site(Byte* site, const Access& access, size_t module_id) {
   size_t patch_length = access.length;
   while (patch_length < 5) {
     const size_t next_length = instruction_length(site + patch_length);
-    if (next_length == 0) return false;
+    if (next_length == 0) {
+      fprintf(stderr, "TLS-rewrite: cannot extend patch at %p after %zu bytes\n",
+              site, patch_length);
+      fprintf(stderr, "TLS-rewrite: next bytes %02x %02x %02x %02x %02x %02x %02x %02x\n",
+              site[patch_length], site[patch_length + 1], site[patch_length + 2],
+              site[patch_length + 3], site[patch_length + 4], site[patch_length + 5],
+              site[patch_length + 6], site[patch_length + 7]);
+      return false;
+    }
     patch_length += next_length;
   }
   const uintptr_t return_address = reinterpret_cast<uintptr_t>(site) + patch_length;
   std::vector<Byte> code = make_stub(return_address, module_id, access,
-                                      site + access.length, patch_length - access.length);
+                                     site + access.length, patch_length - access.length);
   Byte* stub = nullptr;
+  bool absolute_jump = false;
   for (StubPage& page : g_stub_pages) {
     const int64_t page_delta = reinterpret_cast<uintptr_t>(page.base) -
                                (reinterpret_cast<uintptr_t>(site) + 5);
@@ -322,8 +490,40 @@ bool patch_site(Byte* site, const Access& access, size_t module_id) {
       if (stub != nullptr) break;
     }
   }
-  if (stub == nullptr) return false;
-  if (code.size() > page_size) return false;
+  if (stub == nullptr) {
+    // If the ELF image has no free address within the rel32 range, use an
+    // absolute 14-byte jump. This is less compact but keeps real Android
+    // libraries loadable on Windows where the PE address layout is unrelated
+    // to the ELF image address.
+    while (patch_length < 14) {
+      const size_t next_length = instruction_length(site + patch_length);
+      if (next_length == 0) {
+        fprintf(stderr, "TLS-rewrite: cannot extend absolute patch at %p after %zu bytes\n",
+                site, patch_length);
+        fprintf(stderr, "TLS-rewrite: next bytes %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                site[patch_length], site[patch_length + 1], site[patch_length + 2],
+                site[patch_length + 3], site[patch_length + 4], site[patch_length + 5],
+                site[patch_length + 6], site[patch_length + 7]);
+        return false;
+      }
+      patch_length += next_length;
+    }
+    const uintptr_t absolute_return = reinterpret_cast<uintptr_t>(site) + patch_length;
+    code = make_stub(absolute_return, module_id, access,
+                     site + access.length, patch_length - access.length);
+    stub = static_cast<Byte*>(VirtualAlloc(nullptr, page_size,
+                                            MEM_RESERVE | MEM_COMMIT,
+                                            PAGE_EXECUTE_READWRITE));
+    absolute_jump = stub != nullptr;
+  }
+  if (stub == nullptr) {
+    fprintf(stderr, "TLS-rewrite: no executable stub page for %p\n", site);
+    return false;
+  }
+  if (code.size() > page_size) {
+    fprintf(stderr, "TLS-rewrite: stub too large (%zu) for %p\n", code.size(), site);
+    return false;
+  }
   bool is_new_page = true;
   for (const StubPage& page : g_stub_pages) if (page.base == stub) is_new_page = false;
   if (is_new_page) {
@@ -331,29 +531,150 @@ bool patch_site(Byte* site, const Access& access, size_t module_id) {
   }
   const int64_t delta = reinterpret_cast<uintptr_t>(stub) -
                         (reinterpret_cast<uintptr_t>(site) + 5);
-  if (delta < INT32_MIN || delta > INT32_MAX || code.size() > page_size) return false;
+  if ((!absolute_jump && (delta < INT32_MIN || delta > INT32_MAX)) ||
+      code.size() > page_size) {
+    fprintf(stderr, "TLS-rewrite: invalid stub placement for %p (absolute=%d delta=%lld)\n",
+            site, absolute_jump ? 1 : 0, static_cast<long long>(delta));
+    return false;
+  }
   std::memcpy(stub, code.data(), code.size());
   DWORD old_protection = 0;
-  if (!VirtualProtect(site, patch_length, PAGE_EXECUTE_READWRITE, &old_protection)) return false;
-  site[0] = 0xe9;
-  const int32_t relative = static_cast<int32_t>(delta);
-  std::memcpy(site + 1, &relative, sizeof(relative));
-  for (size_t i = 5; i < patch_length; ++i) site[i] = 0x90;
+  if (!VirtualProtect(site, patch_length, PAGE_EXECUTE_READWRITE, &old_protection)) {
+    fprintf(stderr, "TLS-rewrite: VirtualProtect failed for %p (%lu)\n",
+            site, static_cast<unsigned long>(GetLastError()));
+    return false;
+  }
+  if (absolute_jump) {
+    site[0] = 0x49; site[1] = 0xbb;
+    const uint64_t target = reinterpret_cast<uint64_t>(stub);
+    std::memcpy(site + 2, &target, sizeof(target));
+    site[10] = 0x41; site[11] = 0xff; site[12] = 0xe3;
+    site[13] = 0x90;
+  } else {
+    site[0] = 0xe9;
+    const int32_t relative = static_cast<int32_t>(delta);
+    std::memcpy(site + 1, &relative, sizeof(relative));
+  }
+  for (size_t i = absolute_jump ? 14 : 5; i < patch_length; ++i) site[i] = 0x90;
   DWORD ignored = 0;
   VirtualProtect(site, patch_length, old_protection, &ignored);
   FlushInstructionCache(GetCurrentProcess(), site, patch_length);
   return true;
 }
 
+// Open the ELF file by its Windows path and read the section headers to find
+// the individual virtual-address ranges covered by executable sections
+// (SHF_EXECINSTR) within the given PT_LOAD segment. Keeping separate ranges is
+// important: Android ELFs commonly place string/data sections between code
+// sections in the same R+E PT_LOAD, and scanning the min/max span treats those
+// data bytes as x86 instructions.
+static bool find_exec_ranges(const char* path, const ElfW(Ehdr)* ehdr,
+                             ElfW(Addr) seg_vaddr, ElfW(Xword) seg_memsz,
+                             std::vector<std::pair<size_t, size_t>>* ranges) {
+  if (!path || !path[0]) return false;
+  if (ehdr->e_shnum == 0 || ehdr->e_shentsize < sizeof(ElfW(Shdr))) return false;
+  HANDLE fh = CreateFileA(path, GENERIC_READ,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                          NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (fh == INVALID_HANDLE_VALUE) return false;
+  bool ok = false;
+  ElfW(Shdr)* shdrs = static_cast<ElfW(Shdr)*>(
+      malloc(static_cast<size_t>(ehdr->e_shnum) * sizeof(ElfW(Shdr))));
+  if (shdrs) {
+    LARGE_INTEGER off{}; off.QuadPart = static_cast<LONGLONG>(ehdr->e_shoff);
+    LARGE_INTEGER pos{}; pos.QuadPart = 0;
+    DWORD to_read = static_cast<DWORD>(ehdr->e_shnum) * sizeof(ElfW(Shdr));
+    DWORD nr = 0;
+    if (SetFilePointerEx(fh, off, &pos, FILE_BEGIN) &&
+        ReadFile(fh, shdrs, to_read, &nr, NULL) && nr == to_read) {
+      for (uint16_t k = 0; k < ehdr->e_shnum; ++k) {
+        if ((shdrs[k].sh_flags & SHF_EXECINSTR) == 0) continue;
+        if (shdrs[k].sh_addr < seg_vaddr ||
+            shdrs[k].sh_addr >= seg_vaddr + seg_memsz) continue;
+        const size_t sec_start = static_cast<size_t>(shdrs[k].sh_addr - seg_vaddr);
+        const size_t sec_size = static_cast<size_t>(shdrs[k].sh_size);
+        const size_t sec_end = sec_start + sec_size;
+        if (sec_size != 0 && sec_start < seg_memsz)
+          ranges->push_back({sec_start, sec_end > seg_memsz ? seg_memsz : sec_end});
+      }
+      if (!ranges->empty()) {
+        std::sort(ranges->begin(), ranges->end());
+        std::vector<std::pair<size_t, size_t>> merged;
+        for (const auto& range : *ranges) {
+          if (!merged.empty() && range.first <= merged.back().second) {
+            if (range.second > merged.back().second) merged.back().second = range.second;
+          } else {
+            merged.push_back(range);
+          }
+        }
+        ranges->swap(merged);
+        ok = true;
+      }
+    }
+    free(shdrs);
+  }
+  CloseHandle(fh);
+  return ok;
+}
+
 }  // namespace
 
 bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
-                              ElfW(Addr) load_bias, size_t module_id) {
+                              ElfW(Addr) load_bias, size_t module_id,
+                              const char* realpath) {
   for (size_t i = 0; i < phdr_count; ++i) {
     const ElfW(Phdr)& phdr = phdr_table[i];
     if (phdr.p_type != PT_LOAD || (phdr.p_flags & PF_X) == 0) continue;
     Byte* begin = reinterpret_cast<Byte*>(load_bias + phdr.p_vaddr);
-    for (size_t offset = 0; offset + 8 <= phdr.p_memsz;) {
+    // Android ELFs pack data sections (.dynsym, .dynstr, .hash, .rela.*) and
+    // code (.plt, .text) into the same R+E PT_LOAD, with read-only data
+    // (.rodata, .eh_frame) after .text.  Read the section headers from disk
+    // to restrict scanning to exactly the executable sections.
+    std::vector<std::pair<size_t, size_t>> scan_ranges;
+    if (phdr.p_vaddr == 0 && phdr.p_memsz >= sizeof(ElfW(Ehdr))) {
+      const ElfW(Ehdr)* ehdr = reinterpret_cast<const ElfW(Ehdr)*>(begin);
+      if (ehdr->e_ident[0] == '\x7f' && ehdr->e_ident[1] == 'E' &&
+          ehdr->e_ident[2] == 'L' && ehdr->e_ident[3] == 'F') {
+        if (find_exec_ranges(realpath, ehdr, phdr.p_vaddr, phdr.p_memsz,
+                            &scan_ranges)) {
+        } else {
+          // Fallback: use DT_JMPREL + DT_PLTRELSZ to skip past data sections.
+          size_t start_offset = static_cast<size_t>(ehdr->e_phoff) +
+                                static_cast<size_t>(ehdr->e_phnum) * sizeof(ElfW(Phdr));
+          start_offset = (start_offset + 0xfffUL) & ~static_cast<size_t>(0xfffUL);
+          for (size_t j = 0; j < phdr_count; ++j) {
+            if (phdr_table[j].p_type != PT_DYNAMIC) continue;
+            const ElfW(Dyn)* dyn = reinterpret_cast<const ElfW(Dyn)*>(
+                load_bias + phdr_table[j].p_vaddr);
+            ElfW(Addr)  jmprel   = 0;
+            ElfW(Xword) pltrelsz = 0;
+            for (size_t k = 0; k < 256 && dyn[k].d_tag != DT_NULL; ++k) {
+              if (dyn[k].d_tag == DT_JMPREL)   jmprel   = dyn[k].d_un.d_ptr;
+              if (dyn[k].d_tag == DT_PLTRELSZ) pltrelsz = dyn[k].d_un.d_val;
+            }
+            if (jmprel != 0 && pltrelsz != 0) {
+              const size_t rela_end = static_cast<size_t>(
+                  jmprel + pltrelsz - phdr.p_vaddr);
+              if (rela_end > start_offset && rela_end <= phdr.p_memsz)
+                start_offset = rela_end;
+            }
+            break;
+          }
+          scan_ranges.push_back({start_offset, phdr.p_memsz});
+        }
+      }
+    }
+    if (scan_ranges.empty()) scan_ranges.push_back({0, phdr.p_memsz});
+    // Track whether we are at a known instruction boundary. When
+    // instruction_length() returns 0 (unrecognised opcode) we advance by 1
+    // byte and lose sync; a 0x64 byte reached that way is a data byte inside
+    // a non-code section (e.g. .dynsym) that shares the R+E PT_LOAD segment.
+    // Only a 0x64 reached from a known boundary is a genuine FS prefix.
+    for (const auto& scan_range : scan_ranges) {
+      const size_t start_offset = scan_range.first;
+      const size_t end_offset = scan_range.second;
+      bool at_known_boundary = true;
+      for (size_t offset = start_offset; offset + 8 <= end_offset;) {
       Access access = {};
       if (decode(begin + offset, &access)) {
         // Clang's x86-64 initial-exec lowering used by the Android NDK is
@@ -394,21 +715,65 @@ bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
             } else {
               if (!patch_site(begin + offset, access, module_id)) return false;
               offset += access.length;
+              at_known_boundary = true;
               continue;
             }
             if (!patch_site(begin + offset, rewritten, module_id)) return false;
             offset += rewritten.length;
+            at_known_boundary = true;
             continue;
           }
         }
-        if (!patch_site(begin + offset, access, module_id)) return false;
+        if (!patch_site(begin + offset, access, module_id)) {
+          fprintf(stderr, "TLS-rewrite: patch_site FAIL at 0x%zx bytes %02x %02x %02x %02x %02x len=%zu\n",
+                  offset, begin[offset], begin[offset+1], begin[offset+2], begin[offset+3], begin[offset+4], access.length);
+          return false;
+        }
         offset += access.length;
+        at_known_boundary = true;
       } else {
-        if (begin[offset] == 0x64) return false;
+        // A segment override on a register-only form is ignored by x86 and
+        // is emitted by some Android code generators around ABI shuffles. It
+        // is not a TLS access, so skip the complete instruction rather than
+        // failing closed on the decorative 0x64 prefix.
+        const size_t ignored_length = ignored_fs_prefix_length(begin + offset);
+        if (ignored_length != 0) {
+          offset += ignored_length;
+          at_known_boundary = true;
+          continue;
+        }
+        if (begin[offset] == 0x64) {
+          if (!at_known_boundary) {
+            // Data byte reached via a 1-byte advance from an unrecognised
+            // instruction — not an FS-prefix, skip it.
+            offset++;
+            continue;
+          }
+          // A segment prefix is also legal on instructions for which the
+          // segment is ignored, and Android binaries contain embedded byte
+          // tables in executable sections. Treat an unrecognised prefix as a
+          // one-byte opaque instruction and lose boundary synchronisation;
+          // this prevents data bytes from being mistaken for TLS accesses.
+          // Recognised FS memory forms still go through decode() above and
+          // are rewritten, while genuinely unsupported forms fail only if
+          // they subsequently decode as a supported TLS access.
+          fprintf(stderr, "TLS-rewrite: skipping opaque FS-prefix at 0x%zx bytes %02x %02x %02x %02x %02x\n",
+                  offset, begin[offset], begin[offset+1], begin[offset+2], begin[offset+3], begin[offset+4]);
+          offset++;
+          at_known_boundary = false;
+          continue;
+        }
         const size_t length = instruction_length(begin + offset);
-        offset += length == 0 ? 1 : length;
+        if (length == 0) {
+          at_known_boundary = false;
+          offset++;
+        } else {
+          at_known_boundary = true;
+          offset += length;
+        }
       }
     }
+  }
   }
   return true;
 }

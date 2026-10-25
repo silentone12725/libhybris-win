@@ -7,6 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Full hook-table resolver from hooks.c (pthread→winpthread + stdlib). */
+extern void* hybris_get_hooked_symbol(const char *sym, const char *requester);
+
 typedef void *(*android_dlopen_fn)(const char *, int);
 typedef void *(*android_dlsym_fn)(void *, const char *);
 typedef int (*android_dlclose_fn)(void *);
@@ -31,7 +34,8 @@ static android_dlopen_ext_fn linker_dlopen_ext;
 static android_get_path_fn linker_get_path;
 static android_update_path_fn linker_update_path;
 static char windows_dlerror[256];
-static hybris_hook_cb hook_callback;
+/* Exposed so windows_hook_table.c can consult user-supplied fallback. */
+hybris_hook_cb _hybris_win32_user_hook_cb;
 
 static void windows_set_error(const char *message) {
     snprintf(windows_dlerror, sizeof(windows_dlerror), "%s", message);
@@ -53,7 +57,14 @@ static int windows_linker_init(void) {
 
     if (linker_module != NULL) return linker_dlopen != NULL ? 0 : -1;
 
-    directory = getenv("HYBRIS_LINKER_DIR");
+    /* Use GetEnvironmentVariableA to read the real Windows process environment,
+     * bypassing any POSIX shim (MSYS2/Cygwin getenv may return a POSIX path
+     * that LoadLibraryA cannot resolve). */
+    {
+        static char env_dir[MAX_PATH];
+        DWORD n = GetEnvironmentVariableA("HYBRIS_LINKER_DIR", env_dir, sizeof(env_dir));
+        directory = (n > 0 && n < sizeof(env_dir)) ? env_dir : NULL;
+    }
     if (directory == NULL || directory[0] == '\0') directory = ".";
     snprintf(path, sizeof(path), "%s/q.so", directory);
     linker_module = LoadLibraryA(path);
@@ -82,12 +93,17 @@ static int windows_linker_init(void) {
         return -1;
     }
 
-    init(29, hook_callback, 0);
+    /* Use the full hook table (hooks.c) as the primary symbol resolver so
+     * Android's pthread_* calls are mapped to MinGW winpthread rather than
+     * bionic's futex-based implementation.  The user-supplied hook_callback
+     * (set via hybris_set_hook_callback) is consulted as a fallback inside
+     * hybris_get_hooked_symbol for any symbols not in the built-in table. */
+    init(29, hybris_get_hooked_symbol, 0);
     return 0;
 }
 
 void hybris_set_hook_callback(hybris_hook_cb callback) {
-    hook_callback = callback;
+    _hybris_win32_user_hook_cb = callback;
 }
 
 void *android_dlopen(const char *filename, int flag) {

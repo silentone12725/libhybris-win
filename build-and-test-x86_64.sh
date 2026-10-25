@@ -273,6 +273,10 @@ COMMON_SRCS=(
 )
 if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]]; then
     COMMON_SRCS[0]="$COMMON/windows_core_hooks.c"
+    # windows_core_hooks.c owns the public android_* entry points; keep the
+    # resolver in its own translation unit so the Windows build has exactly
+    # one hybris_get_hooked_symbol implementation.
+    COMMON_SRCS+=("$COMMON/windows_hook_table.c")
     COMMON_SRCS[6]="$COMMON/windows_core_properties.c"
     unset 'COMMON_SRCS[7]'
 fi
