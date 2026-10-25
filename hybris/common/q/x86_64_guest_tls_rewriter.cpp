@@ -597,6 +597,14 @@ static bool find_exec_ranges(const char* path, const ElfW(Ehdr)* ehdr,
         if (sec_size != 0 && sec_start < seg_memsz)
           ranges->push_back({sec_start, sec_end > seg_memsz ? seg_memsz : sec_end});
       }
+      // The section header table was read in full, so the set of executable
+      // sections is now authoritative. A library whose only SHF_EXECINSTR
+      // section is empty (e.g. libicudata, which parks a multi-megabyte data
+      // blob in an R+E PT_LOAD with a zero-length .text) yields no ranges and
+      // must be scanned NOT AT ALL — returning success with an empty range set
+      // tells the caller to skip it, rather than falling back to scanning the
+      // whole segment and decoding locale data as x86 instructions.
+      ok = true;
       if (!ranges->empty()) {
         std::sort(ranges->begin(), ranges->end());
         std::vector<std::pair<size_t, size_t>> merged;
@@ -608,7 +616,6 @@ static bool find_exec_ranges(const char* path, const ElfW(Ehdr)* ehdr,
           }
         }
         ranges->swap(merged);
-        ok = true;
       }
     }
     free(shdrs);
@@ -631,12 +638,18 @@ bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
     // (.rodata, .eh_frame) after .text.  Read the section headers from disk
     // to restrict scanning to exactly the executable sections.
     std::vector<std::pair<size_t, size_t>> scan_ranges;
+    // True once we have an authoritative view of this segment's code extent
+    // (from section headers or the DT_JMPREL fallback). When it stays false we
+    // have no information and scan the whole segment; when it is true we trust
+    // scan_ranges even if it is empty (a data-only library has no code).
+    bool have_code_extent = false;
     if (phdr.p_vaddr == 0 && phdr.p_memsz >= sizeof(ElfW(Ehdr))) {
       const ElfW(Ehdr)* ehdr = reinterpret_cast<const ElfW(Ehdr)*>(begin);
       if (ehdr->e_ident[0] == '\x7f' && ehdr->e_ident[1] == 'E' &&
           ehdr->e_ident[2] == 'L' && ehdr->e_ident[3] == 'F') {
         if (find_exec_ranges(realpath, ehdr, phdr.p_vaddr, phdr.p_memsz,
                             &scan_ranges)) {
+          have_code_extent = true;
         } else {
           // Fallback: use DT_JMPREL + DT_PLTRELSZ to skip past data sections.
           size_t start_offset = static_cast<size_t>(ehdr->e_phoff) +
@@ -661,10 +674,15 @@ bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
             break;
           }
           scan_ranges.push_back({start_offset, phdr.p_memsz});
+          have_code_extent = true;
         }
       }
     }
-    if (scan_ranges.empty()) scan_ranges.push_back({0, phdr.p_memsz});
+    // Only scan the whole segment blind when we never learned its code extent.
+    // If we did (section headers or the DT_JMPREL fallback) an empty range set
+    // means "no code here" and the segment is skipped.
+    if (scan_ranges.empty() && !have_code_extent)
+      scan_ranges.push_back({0, phdr.p_memsz});
     // Track whether we are at a known instruction boundary. When
     // instruction_length() returns 0 (unrecognised opcode) we advance by 1
     // byte and lose sync; a 0x64 byte reached that way is a data byte inside
@@ -677,6 +695,28 @@ bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
       for (size_t offset = start_offset; offset + 8 <= end_offset;) {
       Access access = {};
       if (decode(begin + offset, &access)) {
+        // The linear sweep can land inside embedded data (e.g. the ICU locale
+        // tables in libicudata) whose bytes happen to form a short fs:-prefixed
+        // memory op such as "add eax, fs:[rax]" (64 03 00). A genuine static or
+        // initial-exec TLS access always carries a disp32 (>= 8 bytes) or uses
+        // the absolute fs:[disp32] SIB form, so a base-relative, zero-displacement
+        // op shorter than a 5-byte patch site is never real TLS. If such a site
+        // also cannot be grown into a patchable 5 bytes (its trailing bytes are
+        // data, not instructions), treat the 0x64 as an opaque data byte and
+        // resync, instead of aborting the whole image on an unrewritable site.
+        if (access.base_relative && access.tpoff == 0 && access.length < 5) {
+          size_t probe = access.length;
+          while (probe < 5) {
+            const size_t n = instruction_length(begin + offset + probe);
+            if (n == 0) break;
+            probe += n;
+          }
+          if (probe < 5) {
+            offset++;
+            at_known_boundary = false;
+            continue;
+          }
+        }
         // Clang's x86-64 initial-exec lowering used by the Android NDK is
         // commonly: mov GOT(%rip),reg; fs:0; add reg,rax; [load/store].
         // Rewrite the complete sequence so the GOT value is not interpreted

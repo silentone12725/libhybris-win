@@ -323,6 +323,11 @@ static const struct _w32_hook win32_hooks[] = {
     /* process / misc */
     HA(abort,_sysv_abort), HA(exit,_sysv_exit), HA(getenv,_sysv_getenv),
     HA(qsort,_sysv_qsort), HA(time,_sysv_time),
+    /* bionic libc exports the errno accessor as __errno (glibc uses
+     * __errno_location); hook both so bionic code such as
+     * __system_properties_init does not fall through to bionic's own __errno,
+     * which reads an uninitialised thread pointer and returns a bogus pointer. */
+    HA(__errno,_win32_errno_location),
     HA(__errno_location,_win32_errno_location),
 
     /* math (FP args pass in XMM identically across ABIs — raw host OK) */
