@@ -126,20 +126,22 @@ static LONG WINAPI crash_veh(EXCEPTION_POINTERS *ep) {
         }
     }
     {
-        /* Android code pages can be execute-only, so add read access first. */
-        void *pg = (void *)((uintptr_t)er->ExceptionAddress & ~(uintptr_t)0xFFF);
-        DWORD old = 0;
-        BOOL vp = VirtualProtect(pg, 0x1000, PAGE_EXECUTE_READWRITE, &old);
-        if (vp) {
-            unsigned char b[16]; SIZE_T nr = 0;
-            ReadProcessMemory(GetCurrentProcess(), er->ExceptionAddress, b, sizeof(b), &nr);
-            fprintf(stderr, "    RIP bytes (%llu):", (unsigned long long)nr);
-            for (SIZE_T i = 0; i < nr; i++) fprintf(stderr, " %02x", b[i]);
+        /* Dump a window [RIP-64, RIP+32) so we can see how control flow reached
+         * RIP (fall-through vs jump). Make both pages readable first. */
+        uintptr_t rip = (uintptr_t)er->ExceptionAddress;
+        void *pg0 = (void *)((rip - 64) & ~(uintptr_t)0xFFF);
+        DWORD old0 = 0, old1 = 0;
+        VirtualProtect(pg0, 0x1000, PAGE_EXECUTE_READWRITE, &old0);
+        VirtualProtect((void *)(((rip + 32) & ~(uintptr_t)0xFFF)), 0x1000, PAGE_EXECUTE_READWRITE, &old1);
+        unsigned char b[96]; SIZE_T nr = 0;
+        ReadProcessMemory(GetCurrentProcess(), (void *)(rip - 64), b, sizeof(b), &nr);
+        fprintf(stderr, "    code window [RIP-64 .. RIP+32) (%llu bytes), RIP at offset 64:\n",
+                (unsigned long long)nr);
+        for (SIZE_T i = 0; i < nr; i += 16) {
+            fprintf(stderr, "      %+4d:", (int)i - 64);
+            for (SIZE_T j = i; j < i + 16 && j < nr; j++)
+                fprintf(stderr, " %s%02x", (j == 64) ? ">" : "", b[j]);
             fprintf(stderr, "\n");
-            VirtualProtect(pg, 0x1000, old, &old);
-        } else {
-            fprintf(stderr, "    (VirtualProtect failed err=%lu, page=%p)\n",
-                    GetLastError(), pg);
         }
     }
     {
