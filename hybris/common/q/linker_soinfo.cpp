@@ -30,6 +30,8 @@
 
 #include <dlfcn.h>
 #include <elf.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -430,6 +432,9 @@ static void call_array(const char* array_name __attribute__((__unused__)),
 
   for (int i = begin; i != end; i += step) {
     TRACE("[ %s[%d] == %p ]", array_name, i, functions[i]);
+    if (getenv("ADAM_CTOR_DEBUG"))
+      fprintf(stderr, "[ctor] call %s[%d]=%p for %s\n", array_name, i,
+              reinterpret_cast<const void*>(functions[i]), realpath);
     call_function("function", functions[i], realpath);
   }
 
@@ -488,6 +493,13 @@ void soinfo::call_constructors() {
   if (!is_linker()) {
     bionic_trace_begin((std::string("calling constructors: ") + get_realpath()).c_str());
   }
+
+  if (getenv("ADAM_CTOR_DEBUG"))
+    fprintf(stderr, "[ctor] >>> lib=%s base=%p size=0x%zx load_bias=%p init_func=%p init_array=%p count=%zu\n",
+            get_realpath(), reinterpret_cast<void*>(base), size,
+            reinterpret_cast<void*>(load_bias),
+            reinterpret_cast<const void*>(init_func_),
+            reinterpret_cast<void*>(init_array_), init_array_count_);
 
   // DT_INIT should be called before DT_INIT_ARRAY if both are present.
   call_function("DT_INIT", init_func_, get_realpath());

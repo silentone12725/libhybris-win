@@ -464,6 +464,7 @@ bool patch_site(Byte* site, const Access& access, size_t module_id) {
                                      site + access.length, patch_length - access.length);
   Byte* stub = nullptr;
   bool absolute_jump = false;
+  bool reused_page = false;
   for (StubPage& page : g_stub_pages) {
     const int64_t page_delta = reinterpret_cast<uintptr_t>(page.base) -
                                (reinterpret_cast<uintptr_t>(site) + 5);
@@ -471,6 +472,7 @@ bool patch_site(Byte* site, const Access& access, size_t module_id) {
         page.used + code.size() <= page_size) {
       stub = page.base + page.used;
       page.used += (code.size() + 15) & ~static_cast<size_t>(15);
+      reused_page = true;
       break;
     }
   }
@@ -524,10 +526,16 @@ bool patch_site(Byte* site, const Access& access, size_t module_id) {
     fprintf(stderr, "TLS-rewrite: stub too large (%zu) for %p\n", code.size(), site);
     return false;
   }
-  bool is_new_page = true;
-  for (const StubPage& page : g_stub_pages) if (page.base == stub) is_new_page = false;
-  if (is_new_page) {
+  // Only register a brand-new VirtualAlloc'd page. On reuse the matching page's
+  // `used` bump above already reserved this stub's space; pushing another entry
+  // (the old `page.base == stub` test was always true for a reused stub, whose
+  // address is base+used, never base) created overlapping entries that later
+  // handed out addresses on top of existing stubs, corrupting them.
+  if (!reused_page) {
     g_stub_pages.push_back({stub, (code.size() + 15) & ~static_cast<size_t>(15)});
+    if (std::getenv("ADAM_CTOR_DEBUG"))
+      fprintf(stderr, "[stub] new stub page base=%p size=0x1000 (patch site %p, module %zu)\n",
+              static_cast<void*>(stub), static_cast<void*>(site), module_id);
   }
   const int64_t delta = reinterpret_cast<uintptr_t>(stub) -
                         (reinterpret_cast<uintptr_t>(site) + 5);
