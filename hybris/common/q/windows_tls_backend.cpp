@@ -413,6 +413,17 @@ bool ensure_static_block(TlsBackend* backend, TlsContext* context) {
   if (required >= sizeof(void*) && backend->static_tp_offset <= required - sizeof(void*)) {
     void* guest_tp = static_cast<char*>(replacement) + backend->static_tp_offset;
     std::memcpy(guest_tp, &guest_tp, sizeof(guest_tp));
+    // TLS_SLOT_THREAD_ID guest stub: TP[1] must be a valid pointer because the
+    // guest libc reads it as pthread_internal_t* (e.g. __get_thread()). Point it
+    // at a zeroed thread struct so those reads don't fault. Only when the TCB
+    // has room for slot 1 (reserve_exe_segment_and_tcb reserves 11 slots).
+    if (required >= backend->static_tp_offset + 2 * sizeof(void*)) {
+      void** tcb_slots = reinterpret_cast<void**>(guest_tp);
+      if (tcb_slots[1] == nullptr) {
+        void* thr = allocate_block(0x1000, alignof(max_align_t));
+        if (thr != nullptr) { std::memset(thr, 0, 0x1000); tcb_slots[1] = thr; }
+      }
+    }
   }
   for (std::map<size_t, Module>::const_iterator it = backend->modules.begin();
        it != backend->modules.end(); ++it) {
