@@ -14,38 +14,47 @@ extern void *android_dlsym(void *handle, const char *symbol);
 extern const char *android_dlerror(void);
 extern void hybris_set_hook_callback(void *(*cb)(const char *sym, const char *req));
 
+/* Fault-proof read: returns 1 and fills dst on success, 0 if src is unreadable. */
+static int safe_rd(void *dst, const void *src, size_t n) {
+    SIZE_T got = 0;
+    return ReadProcessMemory(GetCurrentProcess(), src, dst, n, &got) && got == n;
+}
+
 /* Parse the ELF image at `base` (an Android .so mapped by hybris) for its
- * DT_SONAME, so a faulting (anon) region can be named. Best-effort; returns
+ * DT_SONAME, so a faulting (anon) region can be named. Fault-proof; returns
  * NULL if `base` is not an ELF or the dynamic table can't be walked. */
 static const char *elf_soname(unsigned char *base) {
-    if (!base || base[0] != 0x7f || base[1] != 'E' || base[2] != 'L' || base[3] != 'F')
+    static char name[128];
+    unsigned char id[4];
+    if (!base || !safe_rd(id, base, 4) ||
+        id[0] != 0x7f || id[1] != 'E' || id[2] != 'L' || id[3] != 'F')
         return NULL;
-    unsigned short phnum, phentsize;
-    unsigned long long phoff;
-    memcpy(&phoff, base + 0x20, 8);
-    memcpy(&phentsize, base + 0x36, 2);
-    memcpy(&phnum, base + 0x38, 2);
+    unsigned short phnum = 0, phentsize = 0;
+    unsigned long long phoff = 0;
+    if (!safe_rd(&phoff, base + 0x20, 8) || !safe_rd(&phentsize, base + 0x36, 2) ||
+        !safe_rd(&phnum, base + 0x38, 2) || phnum > 64)
+        return NULL;
     unsigned long long dyn_vaddr = 0;
     for (unsigned short i = 0; i < phnum; i++) {
         unsigned char *ph = base + phoff + (unsigned)i * phentsize;
-        unsigned int p_type; unsigned long long p_vaddr;
-        memcpy(&p_type, ph, 4);
-        memcpy(&p_vaddr, ph + 0x10, 8);
+        unsigned int p_type = 0; unsigned long long p_vaddr = 0;
+        if (!safe_rd(&p_type, ph, 4) || !safe_rd(&p_vaddr, ph + 0x10, 8)) break;
         if (p_type == 2 /*PT_DYNAMIC*/) { dyn_vaddr = p_vaddr; break; }
     }
     if (!dyn_vaddr) return NULL;
-    unsigned long long *dyn = (unsigned long long *)(base + dyn_vaddr);
     unsigned long long strtab = 0, soname_off = (unsigned long long)-1;
-    for (int i = 0; i < 512 && dyn[i * 2] != 0; i++) {
-        unsigned long long tag = dyn[i * 2], val = dyn[i * 2 + 1];
-        if (tag == 5 /*DT_STRTAB*/) strtab = val;
-        if (tag == 14 /*DT_SONAME*/) soname_off = val;
+    for (int i = 0; i < 512; i++) {
+        unsigned long long d[2];
+        if (!safe_rd(d, base + dyn_vaddr + (size_t)i * 16, 16) || d[0] == 0) break;
+        if (d[0] == 5 /*DT_STRTAB*/) strtab = d[1];
+        if (d[0] == 14 /*DT_SONAME*/) soname_off = d[1];
     }
     if (strtab == 0 || soname_off == (unsigned long long)-1) return NULL;
-    /* DT_STRTAB is a vaddr; for a hybris-mapped image it equals base+offset. */
     unsigned char *s = (strtab > (unsigned long long)base) ? (unsigned char *)strtab
                                                            : base + strtab;
-    return (const char *)(s + soname_off);
+    if (!safe_rd(name, s + soname_off, sizeof(name))) return NULL;
+    name[sizeof(name) - 1] = '\0';
+    return name;
 }
 
 static const char *modname(void *addr) {
@@ -139,8 +148,9 @@ static LONG WINAPI crash_veh(EXCEPTION_POINTERS *ep) {
          * a mapped region (the bad call's return address is among them). */
         unsigned long long *sp = (unsigned long long *)ep->ContextRecord->Rsp;
         fprintf(stderr, "    stack words @rsp:\n");
-        for (int i = 0; i < 24; i++) {
-            unsigned long long v = sp[i];
+        for (int i = 0; i < 40; i++) {
+            unsigned long long v = 0;
+            if (!safe_rd(&v, sp + i, 8)) continue;
             MEMORY_BASIC_INFORMATION mbi;
             if (v > 0x10000 && VirtualQuery((void *)v, &mbi, sizeof(mbi)) &&
                 (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ |

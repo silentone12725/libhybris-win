@@ -93,12 +93,38 @@ function epilogue (`49 89 c3 49 8b 03 41 5f…`), faulting as `add [rcx-0x77],cl
 (write to 0xFFFFFFFFFFFFFF89). r8 points into libc++_shared.so (+0x4e430); the return
 address on the stack is `hybris_abi_call_sysv_ctor` (q.so RVA 0x2b2eb).
 
-**Diagnosis:** a mis-relocated init-array entry for libc++_shared.so — the constructor
-pointer resolves against the wrong base/segment (hybris maps PT_LOADs via VirtualAlloc,
-possibly non-contiguously, so a load_bias-relative init_array entry or R_X86_64_RELATIVE
-reloc points into the wrong region). **Next step:** inspect how libc++_shared.so's
-DT_INIT_ARRAY is relocated and where its segments land vs the single load_bias the
-init_array pointers assume; check whether libc++_shared.so needs ctor_whitelist handling
-or a per-segment bias fix. The smoke2 VEH now prints registers, RIP bytes, ELF SONAME of
-the faulting region, and a stack-word dump with module+SONAME mapping — rebuild with
-`recovery/build_drm.sh` and run `C:\adam-build\smoke2.exe`.
+The faulting region has no ELF header at its VirtualQuery AllocationBase, and the RIP
+bytes look like a trampoline/function epilogue (`mov rax,[r11]; pop r15…r10`). r8 points
+into libc++_shared.so; the stack return addresses are in q.so around
+`hybris_abi_call_sysv_ctor` (RVA ~0x2b2eb/0x2b3fb) and nearby linker frames.
+
+### Ruled out this session
+- **Non-contiguous segment mapping.** `ElfReader::ReserveAddressSpace`
+  (`linker_phdr.cpp`) reserves one contiguous block of `phdr_table_get_load_size`
+  (max_vaddr−min_vaddr) via `win_elf_image_reserve_aligned`, then `LoadSegments` maps
+  each PT_LOAD into it at a single `load_bias`. Segments are contiguous, so a simple
+  per-segment bias mismatch is not the cause.
+- **ABI trampoline.** `hybris_abi_call_sysv_ctor` (`common/abi_thunks.c`) is correct: it
+  rejects only 0/UINTPTR_MAX then calls with the `HYBRIS_ABI_SYSV` convention. It is not
+  corrupting registers; the pointer it is handed is simply bad.
+- **ctor_whitelist (tried and reverted).** Re-added a run-if-listed whitelist seeded with
+  `libstoreservicescore.so`: it removed the libc++_shared crash but moved it to a
+  null-deref (`READ [0x28]`) inside libstoreservicescore's own constructor, because its
+  dependencies' constructors were then skipped. libstoreservicescore needs libc++_shared's
+  globals, but libc++_shared's constructor is the one crashing — a circular dependency
+  that proves the whitelist cannot fix this. Reverted to the clean baseline.
+
+### Refined frontier / next step
+With all constructors running (clean baseline), a constructor invoked via
+`hybris_abi_call_sysv_ctor` jumps to / executes a **bad pointer in a non-ELF region**
+(offset 0x2be0, i.e. larger than a single 0x1000 TLS stub page, so not obviously a stub
+either). Open hypotheses to disambiguate with runtime data:
+1. a mis-relocated `DT_INIT_ARRAY` entry (dump libc++_shared's init_array vs where its
+   code actually maps);
+2. a TLS-rewriter stub control-flow error reached from a constructor's rewritten fs:
+   access (log `g_stub_pages` ranges and check whether the faulting region is one);
+3. a constructor executing correctly but dereferencing a null global.
+Use cdb (`recovery/`-style) but note first-chance RELRO faults are handled by smoke2's VEH
+(use `sxd av` and make the VEH's diagnostic reads fault-proof — already done via `safe_rd`
+so the handler no longer self-crashes while dumping). smoke2's VEH now prints registers,
+RIP bytes, ELF SONAME of the faulting region, and a fault-proof stack-word→module dump.
