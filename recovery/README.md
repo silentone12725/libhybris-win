@@ -128,3 +128,27 @@ Use cdb (`recovery/`-style) but note first-chance RELRO faults are handled by sm
 (use `sxd av` and make the VEH's diagnostic reads fault-proof — already done via `safe_rd`
 so the handler no longer self-crashes while dumping). smoke2's VEH now prints registers,
 RIP bytes, ELF SONAME of the faulting region, and a fault-proof stack-word→module dump.
+
+## RECOVERY COMPLETE — back at the DeviceGUID frontier (2026-10-26, session fc48eaaa)
+Re-reached the exact pre-wipe frontier: init now runs through all library loads
+and every C++ runtime / platform / Apple-library constructor (including
+libandroidappmusic's 91 init-array entries) and crashes in
+`storeservicescore::DeviceGUID::configure()` because `DeviceGUID::instance`
+returned NULL (`movzx eax,[rbx]` with rbx=0) — identical to where the VM died.
+
+Bugs fixed to get here (all committed+pushed to master):
+- Stub-page bump allocator overwriting live stubs (138445e).
+- Bionic TCB never reserved/published with no PT_TLS library (5a2b6e9).
+- Syscall-based bionic libc (syscall/sched_yield/nanosleep/clock_gettime/
+  clock_getres) executing raw `syscall` on Windows -> hooked (64a45a0).
+- instruction_length decoder gaps that desynced the linear sweep and left fs:
+  stack-guard accesses unrewritten: 0xc6 imm8, 0F38/0F3A, segment-override
+  prefixes, imul 0x69/0x6b, and the 0x66 operand-size imm16/imm32 width
+  (fcfa37a, 29d7e54, c0fe139).
+
+NEXT STEP (same as the original frontier note): find why
+`storeservicescore::DeviceGUID::instance()` returns NULL — step into it (it is in
+libstoreservicescore.so; disassemble `_ZN17storeservicescore10DeviceGUID8instanceEv`)
+and look for a stubbed/ABI'd dependency or a config/global it needs that is unset,
+rather than chasing the configure() null-deref. The ADAM_CTOR_DEBUG / ADAM_TLS_DESYNC
+diagnostics and smoke2's VEH remain available.
