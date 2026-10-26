@@ -204,9 +204,16 @@ void pop_reg(std::vector<Byte>* code, unsigned reg) {
 
 size_t instruction_length(const Byte* p) {
   size_t i = 0;
+  bool opsize16 = false;
   while (p[i] == 0x64 || p[i] == 0x65 || p[i] == 0x66 || p[i] == 0x67 ||
          p[i] == 0xf0 || p[i] == 0xf2 || p[i] == 0xf3 ||
-         p[i] == 0x2e || p[i] == 0x36 || p[i] == 0x3e || p[i] == 0x26) ++i;
+         p[i] == 0x2e || p[i] == 0x36 || p[i] == 0x3e || p[i] == 0x26) {
+    if (p[i] == 0x66) opsize16 = true;
+    ++i;
+  }
+  // Immediate width for "iz" operands: imm16 under a 0x66 operand-size prefix,
+  // otherwise imm32. (REX.W makes mov-imm 64-bit; handled per-opcode below.)
+  const size_t immz = opsize16 ? 2 : 4;
   const bool rex_w = (p[i] & 0xf0) == 0x40 && (p[i] & 8) != 0;
   if ((p[i] & 0xf0) == 0x40) ++i;
   const Byte opcode = p[i++];
@@ -252,17 +259,17 @@ size_t instruction_length(const Byte* p) {
     }
     return i;
   }
-  if (opcode == 0xe8 || opcode == 0xe9 || opcode == 0x68) return i + 4;
+  if (opcode == 0xe8 || opcode == 0xe9 || opcode == 0x68) return i + immz;
   if (opcode == 0xeb || (opcode >= 0x70 && opcode <= 0x7f) ||
       (opcode >= 0xe0 && opcode <= 0xe3) || opcode == 0x6a) return i + 1;
   if (opcode >= 0xb0 && opcode <= 0xb7) return i + 1;
-  if (opcode >= 0xb8 && opcode <= 0xbf) return i + (rex_w ? 8 : 4);
+  if (opcode >= 0xb8 && opcode <= 0xbf) return i + (rex_w ? 8 : immz);
   bool has_modrm = false;
   size_t immediate = 0;
   switch (opcode) {
     // Accumulator-register short forms with imm32
     case 0x05: case 0x0d: case 0x15: case 0x1d: case 0x2d: case 0x35: case 0x3d:
-      return i + 4;
+      return i + immz;
     // Accumulator-register short forms with imm8
     case 0x04: case 0x0c: case 0x14: case 0x1c: case 0x24: case 0x2c: case 0x34: case 0x3c:
       return i + 1;
@@ -283,20 +290,20 @@ size_t instruction_length(const Byte* p) {
       // 0x81 (r/m32,imm32) and 0xc7 (mov r/m32,imm32) carry an imm32. Treating
       // 0xc6 as imm32 oversized "mov byte ptr,imm8" by 3 bytes, making the sweep
       // step over the following fs: access (e.g. a stack-guard load).
-      immediate = (opcode == 0x80 || opcode == 0xc6) ? 1 : 4;
+      immediate = (opcode == 0x80 || opcode == 0xc6) ? 1 : immz;
       break;
-    case 0x69:  // imul r, r/m, imm32
+    case 0x69:  // imul r, r/m, imm32 (imm16 under 0x66)
       has_modrm = true;
-      immediate = 4;
+      immediate = immz;
       break;
     case 0x6b:  // imul r, r/m, imm8
       has_modrm = true;
       immediate = 1;
       break;
     case 0xa9:
-      return i + 4;
+      return i + immz;
     case 0x25:
-      return i + 4;
+      return i + immz;
     case 0x83: case 0xc1: case 0xf6:
       has_modrm = true;
       immediate = 1;
