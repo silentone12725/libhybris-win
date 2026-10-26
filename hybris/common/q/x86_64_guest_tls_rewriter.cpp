@@ -205,15 +205,33 @@ void pop_reg(std::vector<Byte>* code, unsigned reg) {
 size_t instruction_length(const Byte* p) {
   size_t i = 0;
   while (p[i] == 0x64 || p[i] == 0x65 || p[i] == 0x66 || p[i] == 0x67 ||
-         p[i] == 0xf0 || p[i] == 0xf2 || p[i] == 0xf3) ++i;
+         p[i] == 0xf0 || p[i] == 0xf2 || p[i] == 0xf3 ||
+         p[i] == 0x2e || p[i] == 0x36 || p[i] == 0x3e || p[i] == 0x26) ++i;
   const bool rex_w = (p[i] & 0xf0) == 0x40 && (p[i] & 8) != 0;
   if ((p[i] & 0xf0) == 0x40) ++i;
   const Byte opcode = p[i++];
   if (opcode == 0x0f) {
     const Byte extended = p[i++];
     if (extended >= 0x80 && extended <= 0x8f) return i + 4;  // jcc rel32
-    // 3-byte opcode groups (SSSE3, SSE4): conservative fallback.
-    if (extended == 0x38 || extended == 0x3a) return 0;
+    // 3-byte opcode groups (SSSE3/SSE4/PCLMUL): 0F 38 xx and 0F 3A xx. The
+    // Android x86-64 ABI baseline is SSE4.2, so media code (libmediaplatform)
+    // is full of these; returning 0 here desynced the linear sweep and left
+    // later fs: stack-guard accesses unrewritten. Decode the third opcode byte,
+    // the ModRM/SIB/displacement, and the imm8 that every 0F 3A form carries.
+    if (extended == 0x38 || extended == 0x3a) {
+      ++i;  // third opcode byte
+      const Byte modrm3 = p[i++];
+      const unsigned mod3 = modrm3 >> 6;
+      if (mod3 != 3 && (modrm3 & 7) == 4) {
+        const Byte sib3 = p[i++];
+        if (mod3 == 0 && (sib3 & 7) == 5) i += 4;
+      }
+      if (mod3 == 0 && (modrm3 & 7) == 5) i += 4;
+      if (mod3 == 1) ++i;
+      if (mod3 == 2) i += 4;
+      if (extended == 0x3a) ++i;  // 0F 3A opcodes carry an imm8
+      return i;
+    }
     // setcc, cmovcc and most SSE opcodes all have a ModRM byte.
     const Byte modrm2 = p[i++];
     const unsigned mod2 = modrm2 >> 6;
@@ -261,7 +279,11 @@ size_t instruction_length(const Byte* p) {
        break;
     case 0x80: case 0x81: case 0xc6: case 0xc7:
       has_modrm = true;
-      immediate = opcode == 0x80 ? 1 : 4;
+      // 0x80 (group1 r/m8,imm8) and 0xc6 (mov r/m8,imm8) carry an imm8; only
+      // 0x81 (r/m32,imm32) and 0xc7 (mov r/m32,imm32) carry an imm32. Treating
+      // 0xc6 as imm32 oversized "mov byte ptr,imm8" by 3 bytes, making the sweep
+      // step over the following fs: access (e.g. a stack-guard load).
+      immediate = (opcode == 0x80 || opcode == 0xc6) ? 1 : 4;
       break;
     case 0xa9:
       return i + 4;
@@ -813,6 +835,11 @@ bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
         }
         const size_t length = instruction_length(begin + offset);
         if (length == 0) {
+          if (std::getenv("ADAM_TLS_DESYNC"))
+            fprintf(stderr, "[desync] %p off=0x%zx: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                    static_cast<void*>(begin + offset), offset,
+                    begin[offset], begin[offset+1], begin[offset+2], begin[offset+3],
+                    begin[offset+4], begin[offset+5], begin[offset+6], begin[offset+7]);
           at_known_boundary = false;
           offset++;
         } else {
