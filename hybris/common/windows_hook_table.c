@@ -220,6 +220,59 @@ static void __attribute__((sysv_abi)) _sysv_qsort(void *base,size_t n,size_t sz,
     if (cmp(a+i*sz,a+j*sz)>0){ memcpy(tmp,a+i*sz,sz); memcpy(a+i*sz,a+j*sz,sz); memcpy(a+j*sz,tmp,sz); }
 }
 static long __attribute__((sysv_abi)) _sysv_time(long *t){ time_t r=time(NULL); if(t)*t=(long)r; return (long)r; }
+
+/* Bionic implements these via a raw `syscall` instruction. Executed on Windows
+ * that traps into the Windows kernel with a Linux syscall number (and the
+ * `syscall` instruction clobbers rcx/r11), corrupting the guest. libc++'s
+ * __cxa_guard_release does syscall(SYS_futex, FUTEX_WAKE) on every static-init
+ * guard, which crashed locale initialization. Provide Windows-safe stand-ins.
+ * Fixed 6-arg prototype: SysV passes the first 6 args in registers, so this
+ * reads them correctly no matter how many the caller actually supplied. */
+static long __attribute__((sysv_abi)) _sysv_sched_yield(void){ SwitchToThread(); return 0; }
+static long __attribute__((sysv_abi)) _sysv_nanosleep(const long *req, long *rem){
+  (void)rem;
+  if (req){ long long ms = (long long)req[0]*1000 + req[1]/1000000;
+            if (ms < 0) ms = 0; if (ms == 0 && (req[0]||req[1])) ms = 1; Sleep((DWORD)ms); }
+  return 0;
+}
+/* bionic clock_gettime/clock_getres are syscall-based too. libCoreFoundation
+ * does CHECK(clock_getres(CLOCK_MONOTONIC, &res) == 0) and ud2's on failure.
+ * Write the timespec as two explicit 8-byte fields: bionic's tv_nsec is 64-bit
+ * (LP64), but MinGW's `long` is 32-bit (LLP64), so struct timespec differs. */
+static long __attribute__((sysv_abi)) _sysv_clock_gettime(int clk, long long *tp){
+  if (!tp) { errno = 14 /*EFAULT*/; return -1; }
+  if (clk == 0 /*CLOCK_REALTIME*/) {
+    FILETIME ft; GetSystemTimePreciseAsFileTime(&ft);
+    unsigned long long t = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    t -= 116444736000000000ULL;  /* 1601 -> 1970 in 100ns units */
+    tp[0] = (long long)(t / 10000000ULL);
+    tp[1] = (long long)((t % 10000000ULL) * 100);
+  } else {  /* MONOTONIC and friends */
+    LARGE_INTEGER c, f; QueryPerformanceCounter(&c); QueryPerformanceFrequency(&f);
+    if (f.QuadPart == 0) { tp[0] = 0; tp[1] = 0; return 0; }
+    tp[0] = (long long)(c.QuadPart / f.QuadPart);
+    tp[1] = (long long)(((c.QuadPart % f.QuadPart) * 1000000000ULL) / f.QuadPart);
+  }
+  return 0;
+}
+static long __attribute__((sysv_abi)) _sysv_clock_getres(int clk, long long *res){
+  (void)clk;
+  if (res) { res[0] = 0; res[1] = 1; }  /* 1 ns */
+  return 0;
+}
+static long __attribute__((sysv_abi)) _sysv_syscall(long n, long a1, long a2, long a3, long a4, long a5){
+  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+  switch (n) {
+    case 24:  SwitchToThread(); return 0;                 /* __NR_sched_yield */
+    case 35:  return _sysv_nanosleep((const long*)a1,(long*)a2); /* __NR_nanosleep */
+    case 39:  return (long)GetCurrentProcessId();          /* __NR_getpid */
+    case 186: return (long)GetCurrentThreadId();           /* __NR_gettid */
+    case 202: return 0;  /* __NR_futex: single-threaded init — wake is a no-op,
+                            a wait returns "woken" so the caller re-checks. */
+    case 234: return 0;                                    /* __NR_tgkill */
+    default:  errno = 38 /*ENOSYS*/; return -1;
+  }
+}
 static int *__attribute__((sysv_abi)) _win32_errno_location(void){ return _errno(); }
 
 /* ── mmap family (guest -> VirtualAlloc, sysv_abi) ──────────────────────── */
@@ -323,6 +376,11 @@ static const struct _w32_hook win32_hooks[] = {
     /* process / misc */
     HA(abort,_sysv_abort), HA(exit,_sysv_exit), HA(getenv,_sysv_getenv),
     HA(qsort,_sysv_qsort), HA(time,_sysv_time),
+    /* syscall-based bionic functions: replace the raw `syscall` instruction
+     * (invalid on Windows) with Windows-safe stand-ins. */
+    HA(syscall,_sysv_syscall), HA(sched_yield,_sysv_sched_yield),
+    HA(nanosleep,_sysv_nanosleep),
+    HA(clock_gettime,_sysv_clock_gettime), HA(clock_getres,_sysv_clock_getres),
     /* bionic libc exports the errno accessor as __errno (glibc uses
      * __errno_location); hook both so bionic code such as
      * __system_properties_init does not fall through to bionic's own __errno,
