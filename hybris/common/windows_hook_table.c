@@ -203,7 +203,10 @@ static int __attribute__((sysv_abi)) _bionic_attr_setschedparam(void *a,const vo
 static int __attribute__((sysv_abi)) _bionic_attr_getschedparam(void *a,void *pm){return pthread_attr_getschedparam((pthread_attr_t*)a,(struct sched_param*)pm);}
 struct _bionic_thread_tramp { void *(*fn)(void *); void *arg; };
 static void *_bionic_thread_entry(void *p){ struct _bionic_thread_tramp *t=(struct _bionic_thread_tramp*)p;
-  void*(__attribute__((sysv_abi))*fn)(void*)=(void*(__attribute__((sysv_abi))*)(void*))t->fn; void*arg=t->arg; free(t); return fn(arg); }
+  void*(__attribute__((sysv_abi))*fn)(void*)=(void*(__attribute__((sysv_abi))*)(void*))t->fn; void*arg=t->arg; free(t);
+  fprintf(stderr,"[thread-entry] fn=%p tid=%lu BEGIN\n",(void*)(uintptr_t)fn,(unsigned long)GetCurrentThreadId()); fflush(stderr);
+  void *r=fn(arg);
+  fprintf(stderr,"[thread-entry] fn=%p tid=%lu END\n",(void*)(uintptr_t)fn,(unsigned long)GetCurrentThreadId()); fflush(stderr); return r; }
 static int __attribute__((sysv_abi)) _bionic_pthread_create(void *tid,const void *attr,void *(*fn)(void*),void *arg)
 { (void)attr; fprintf(stderr,"[pthread_create] fn=%p\n",(void*)(uintptr_t)fn); struct _bionic_thread_tramp *t=(struct _bionic_thread_tramp*)malloc(sizeof *t); if(!t) return EAGAIN;
   t->fn=fn; t->arg=arg; int rc=pthread_create((pthread_t*)tid,NULL,_bionic_thread_entry,t); if(rc)free(t); return rc; }
@@ -400,7 +403,7 @@ static int __attribute__((sysv_abi)) _sysv_open_2(const char *path, int bflags){
 }
 static long __attribute__((sysv_abi)) _sysv_read(int fd, void *buf, size_t n){
     if (_is_ur(fd)){ if (!SystemFunction036(buf,(unsigned long)n)) return -1; return (long)n; }
-    return _read(fd, buf, (unsigned)n);
+    long r=_read(fd, buf, (unsigned)n); DBG("read(fd=%d n=%zu) -> %ld\n", fd, n, r); return r;
 }
 static long __attribute__((sysv_abi)) _sysv_write(int fd, const void *buf, size_t n){ return _write(fd, buf, (unsigned)n); }
 static int __attribute__((sysv_abi)) _sysv_close(int fd){
@@ -409,7 +412,7 @@ static int __attribute__((sysv_abi)) _sysv_close(int fd){
 }
 static long long __attribute__((sysv_abi)) _sysv_lseek(int fd, long long off, int whence){
     if (_is_ur(fd)) return 0;
-    return _lseeki64(fd, off, whence);
+    long long r=_lseeki64(fd, off, whence); DBG("lseek(fd=%d off=%lld whence=%d) -> %lld\n", fd, off, whence, r); return r;
 }
 /* SQLite's unix VFS needs more file ops. Fill bionic's x86-64 struct stat layout
  * (st_dev@0, st_ino@8, st_nlink@16, st_mode@24, st_rdev@40, st_size@48,
@@ -439,13 +442,13 @@ static long __attribute__((sysv_abi)) _sysv_pread64(int fd, void *buf, size_t n,
     if (_is_ur(fd)){ if (!SystemFunction036(buf,(unsigned long)n)) return -1; return (long)n; }
     HANDLE h = (HANDLE)(intptr_t)_get_osfhandle(fd); if (h==INVALID_HANDLE_VALUE) return -1;
     OVERLAPPED ov; memset(&ov,0,sizeof ov); ov.Offset=(DWORD)off; ov.OffsetHigh=(DWORD)(off>>32);
-    DWORD got=0; if (!ReadFile(h, buf, (DWORD)n, &got, &ov)){ if (GetLastError()==ERROR_HANDLE_EOF) return 0; return -1; }
-    return (long)got;
+    DWORD got=0; if (!ReadFile(h, buf, (DWORD)n, &got, &ov)){ if (GetLastError()==ERROR_HANDLE_EOF){ DBG("pread64(fd=%d n=%zu off=%lld) -> 0 (EOF)\n",fd,n,off); return 0;} DBG("pread64(fd=%d n=%zu off=%lld) -> -1 gle=%lu\n",fd,n,off,GetLastError()); return -1; }
+    DBG("pread64(fd=%d n=%zu off=%lld) -> %lu\n",fd,n,off,got); return (long)got;
 }
 static long __attribute__((sysv_abi)) _sysv_pwrite64(int fd, const void *buf, size_t n, long long off){
     HANDLE h = (HANDLE)(intptr_t)_get_osfhandle(fd); if (h==INVALID_HANDLE_VALUE) return -1;
     OVERLAPPED ov; memset(&ov,0,sizeof ov); ov.Offset=(DWORD)off; ov.OffsetHigh=(DWORD)(off>>32);
-    DWORD put=0; if (!WriteFile(h, buf, (DWORD)n, &put, &ov)) return -1; return (long)put;
+    DWORD put=0; if (!WriteFile(h, buf, (DWORD)n, &put, &ov)){ DBG("pwrite64(fd=%d n=%zu off=%lld) -> -1 gle=%lu\n",fd,n,off,GetLastError()); return -1; } DBG("pwrite64(fd=%d n=%zu off=%lld) -> %lu\n",fd,n,off,put); return (long)put;
 }
 /* fcntl: single-process, so advisory locks always succeed; F_GETLK(5) reports no
  * conflicting lock (l_type = F_UNLCK = 2 at offset 0 of struct flock). */
@@ -455,7 +458,7 @@ static int __attribute__((sysv_abi)) _sysv_fcntl(int fd, int cmd, void *arg){
     if (cmd == 5 && arg) *(short*)arg = 2;
     return 0;
 }
-static int __attribute__((sysv_abi)) _sysv_access(const char *p, int m){ if((uintptr_t)p<0x10000u) return -1; return _access(_winpath(p), m & 06); }
+static int __attribute__((sysv_abi)) _sysv_access(const char *p, int m){ if((uintptr_t)p<0x10000u) return -1; int r=_access(_winpath(p), m & 06); DBG("access(\"%s\" m=%d) -> %d errno=%d\n", p, m, r, r?errno:0); return r; }
 static int __attribute__((sysv_abi)) _sysv_fsync(int fd){ _commit(fd); return 0; }
 static int __attribute__((sysv_abi)) _sysv_ftruncate(int fd, long long len){ return _chsize_s(fd, len)==0 ? 0 : -1; }
 static char *__attribute__((sysv_abi)) _sysv_getcwd(char *buf, size_t size){ return _getcwd(buf, (int)size); }
@@ -536,7 +539,18 @@ static int   __attribute__((sysv_abi)) _sysv_dladdr(const void *a,void *i){retur
 static int   __attribute__((sysv_abi)) _sysv_dl_iterate_phdr(void *cb,void *d){return android_dl_iterate_phdr((int(*)(void*,size_t,void*))cb,d);}
 
 /* ── Android log (liblog.so) — sysv_abi, suppressed ─────────────────────── */
-static int __attribute__((sysv_abi)) _win32_android_log_print(int prio,const char *tag,const char *fmt,...){(void)prio;(void)tag;(void)fmt;return 0;}
+static void _alog_emit(const char *tag,const char *msg){
+    if(!_dbg()) return; char b[1024];
+    int n=snprintf(b,sizeof b,"[alog] %s: %s\n", tag?tag:"", msg?msg:"");
+    if(n>0){ if(n>(int)sizeof b)n=sizeof b; DWORD wr; WriteFile(GetStdHandle(STD_ERROR_HANDLE),b,(DWORD)n,&wr,NULL); }
+}
+static int __attribute__((sysv_abi)) _win32_android_log_print(int prio,const char *tag,const char *fmt,...){
+    /* Variadic + sysv_abi va handling is unsafe from this Windows-ABI build, so
+     * emit the (unexpanded) format string rather than running va_start. */
+    (void)prio; _alog_emit(tag,fmt); return 0; }
+/* __android_log_write(prio, tag, text): text is a literal message, not a fmt. */
+static int __attribute__((sysv_abi)) _win32_android_log_write(int prio,const char *tag,const char *text){
+    (void)prio; _alog_emit(tag,text); return 0; }
 static int __attribute__((sysv_abi)) _win32_android_log_buf_print(int buf,int prio,const char *tag,const char *fmt,...){(void)buf;(void)prio;(void)tag;(void)fmt;return 0;}
 static int __attribute__((sysv_abi)) _win32___android_log_is_loggable(int p,const char *t,int d){(void)p;(void)t;(void)d;return 1;}
 
@@ -652,7 +666,7 @@ static const struct _w32_hook win32_hooks[] = {
     HA(__android_log_print,_win32_android_log_print),
     HA(__android_log_buf_print,_win32_android_log_buf_print),
     HA(__android_log_is_loggable,_win32___android_log_is_loggable),
-    HA(__android_log_write,_win32_android_log_print),
+    HA(__android_log_write,_win32_android_log_write),
 
     { NULL, NULL }
 };
