@@ -152,3 +152,24 @@ libstoreservicescore.so; disassemble `_ZN17storeservicescore10DeviceGUID8instanc
 and look for a stubbed/ABI'd dependency or a config/global it needs that is unset,
 rather than chasing the configure() null-deref. The ADAM_CTOR_DEBUG / ADAM_TLS_DESYNC
 diagnostics and smoke2's VEH remain available.
+
+## PAST THE FRONTIER — SysV-ABI host->guest calls (2026-10-26, session fc48eaaa)
+The pre-wipe frontier (DeviceGUID::configure crash, g_GUID.obj NULL) was caused by
+the DRM wrapper (apple-music-linux/drm/native, gitignored there; stale base in the
+`wrapper` repo) calling resolved guest (SysV) functions through plain host function
+pointers. On Windows the host ABI is Microsoft x64, so args were passed in the wrong
+registers: DeviceGUID::instance() never filled g_GUID; configure() got the null obj
+as its first std::string& and crashed. Fix: every guest-function pointer in
+hybris_stubs.c is now __attribute__((sysv_abi)) (no-op on Linux), incl. the two
+vf_*_invoke vtable-dispatch helpers (their inner cast too). DRM init then ran the
+full RequestContext setup, cp1..cp15.
+
+The current (Windows-ported) hybris_stubs.c and main.c are preserved here under
+recovery/drm-native/ because drm/native is gitignored in apple-music-linux and the
+`wrapper` repo's copies predate the Windows port. Re-apply from here after any reset.
+
+Current blocker: crash inside guest storeservicescore::RequestContext::init (cp15),
+`cmp [rdx+0x28],0` with rdx=0x20 (reads 0x48). Likely a malformed RequestContextConfig
+object (our wrapper sets its vtable up manually at cp2/cp3) or missing session/device
+data (base_dir C:\Users\Podman\drm_files is empty). Next: disassemble
+storeservicescore::RequestContext::init and check reqCtx/reqCtxCfg object layout+vtable.
