@@ -107,14 +107,14 @@ if [[ $fail -ne 0 ]]; then echo "BUILD ABORTED (compile errors above)"; exit 1; 
 
 echo "=== Linking libdrm_client.dll ==="
 g++ -shared -fPIC -o "$BUILD/libdrm_client.dll" "${OBJS[@]}" \
-    -lsupc++ -lpthread -lm -lstdc++ -lws2_32 \
+    -lsupc++ -lpthread -lm -lstdc++ -lws2_32 -ladvapi32 \
     -Wl,--export-all-symbols -Wl,--out-implib,"$BUILD/libdrm_client.dll.a"
 if [[ $? -ne 0 ]]; then echo "LINK FAILED"; exit 1; fi
 ls -lh "$BUILD/libdrm_client.dll"
 
 echo "=== Building smoke2.exe ==="
 gcc -std=gnu11 -O1 -g "-I$NS" /c/adam-src/smoke2.c "$BUILD/libdrm_client.dll" \
-    -lpthread -lm -lws2_32 \
+    -lpthread -lm -lws2_32 -ladvapi32 \
     -Xlinker --stack -Xlinker 0x4000000,0x4000000 \
     -o "$BUILD/smoke2.exe"
 if [[ $? -ne 0 ]]; then echo "SMOKE2 LINK FAILED"; exit 1; fi

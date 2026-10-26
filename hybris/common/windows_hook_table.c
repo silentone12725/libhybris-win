@@ -28,6 +28,8 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <malloc.h>
+#include <io.h>
+#include <fcntl.h>
 #include <time.h>
 
 /* Win32 pthread wrappers (static functions). */
@@ -47,29 +49,78 @@ extern int   android_dl_iterate_phdr(int (*)(void *, size_t, void *), void *);
 /* ── bionic pthread_mutex (int32 spinlock) ──────────────────────────────────
  * bionic pthread_mutex_t is a 4-byte atomic int (0=unlocked, 1=locked), not
  * winpthread's heap-pointer handle, so reimplement it directly. */
+/* bionic pthread_mutex types include PTHREAD_MUTEX_RECURSIVE, and the DRM code
+ * locks some mutexes re-entrantly on one thread. A bare int32 lock word can't
+ * express recursion, so treat every mutex as recursive: the int32 is the
+ * cross-thread lock bit, and a side table records the owning thread and the
+ * recursion depth. (Making a normal mutex recursive is harmless: it is locked
+ * and unlocked exactly once, depth 1.) */
+static CRITICAL_SECTION g_mtab_cs;
+static volatile long    g_mtab_cs_state = 0;  /* 0=uninit 1=initing 2=ready */
+static struct { void *m; unsigned long owner; int depth; } g_mtab[512];
+static int g_mtab_n = 0;
+static void _mtab_ready(void){
+    /* The first mutex use happens during single-threaded init, before any
+     * pthread_create, so a plain guard is sufficient to initialize the CS. */
+    if (g_mtab_cs_state == 2) return;
+    if (g_mtab_cs_state == 0){ g_mtab_cs_state = 1; InitializeCriticalSection(&g_mtab_cs); g_mtab_cs_state = 2; }
+    else { while (g_mtab_cs_state != 2) SwitchToThread(); }
+}
+static int _mtab_find(void *m){ for (int i=0;i<g_mtab_n;i++) if (g_mtab[i].m==m) return i; return -1; }
 static int __attribute__((sysv_abi)) _bionic_mutex_init(volatile int32_t *m, const void *attr)
-{ if (!m) return EINVAL; (void)attr; __atomic_store_n(m, 0, __ATOMIC_RELEASE); return 0; }
-static int __attribute__((sysv_abi)) _bionic_mutex_destroy(volatile int32_t *m) { (void)m; return 0; }
+{ if (!m) return EINVAL; (void)attr; __atomic_store_n(m, 0, __ATOMIC_RELEASE);
+  _mtab_ready(); EnterCriticalSection(&g_mtab_cs); int i=_mtab_find((void*)m);
+  if(i>=0){ g_mtab[i].owner=0; g_mtab[i].depth=0; } LeaveCriticalSection(&g_mtab_cs); return 0; }
+static int __attribute__((sysv_abi)) _bionic_mutex_destroy(volatile int32_t *m)
+{ if (!m) return 0; _mtab_ready(); EnterCriticalSection(&g_mtab_cs); int i=_mtab_find((void*)m);
+  if(i>=0){ g_mtab[i]=g_mtab[--g_mtab_n]; } LeaveCriticalSection(&g_mtab_cs); return 0; }
 static int __attribute__((sysv_abi)) _bionic_mutex_lock(volatile int32_t *m)
 {
-    int32_t old;
     if (!m) return EINVAL;
-    old = 0;
-    if (__atomic_compare_exchange_n(m, &old, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) return 0;
+    _mtab_ready();
+    unsigned long me = GetCurrentThreadId();
     for (;;) {
-        int32_t state = __atomic_load_n(m, __ATOMIC_RELAXED);
-        if (state == 0) {
-            old = 0;
-            if (__atomic_compare_exchange_n(m, &old, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) return 0;
+        EnterCriticalSection(&g_mtab_cs);
+        int i = _mtab_find((void*)m);
+        if (i >= 0 && g_mtab[i].owner == me){ g_mtab[i].depth++; LeaveCriticalSection(&g_mtab_cs); return 0; }
+        int32_t old = 0;
+        if (__atomic_compare_exchange_n(m, &old, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)){
+            if (i < 0 && g_mtab_n < 512){ i = g_mtab_n++; g_mtab[i].m = (void*)m; }
+            if (i >= 0){ g_mtab[i].owner = me; g_mtab[i].depth = 1; }
+            LeaveCriticalSection(&g_mtab_cs); return 0;
         }
+        LeaveCriticalSection(&g_mtab_cs);
         SwitchToThread();
     }
 }
 static int __attribute__((sysv_abi)) _bionic_mutex_trylock(volatile int32_t *m)
-{ int32_t old; if (!m) return EINVAL; old = 0;
-  return __atomic_compare_exchange_n(m, &old, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED) ? 0 : EBUSY; }
+{
+    if (!m) return EINVAL;
+    _mtab_ready();
+    unsigned long me = GetCurrentThreadId();
+    EnterCriticalSection(&g_mtab_cs);
+    int i = _mtab_find((void*)m);
+    if (i >= 0 && g_mtab[i].owner == me){ g_mtab[i].depth++; LeaveCriticalSection(&g_mtab_cs); return 0; }
+    int32_t old = 0; int rc = EBUSY;
+    if (__atomic_compare_exchange_n(m, &old, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)){
+        if (i < 0 && g_mtab_n < 512){ i = g_mtab_n++; g_mtab[i].m = (void*)m; }
+        if (i >= 0){ g_mtab[i].owner = me; g_mtab[i].depth = 1; } rc = 0;
+    }
+    LeaveCriticalSection(&g_mtab_cs); return rc;
+}
 static int __attribute__((sysv_abi)) _bionic_mutex_unlock(volatile int32_t *m)
-{ if (!m) return EINVAL; __atomic_store_n(m, 0, __ATOMIC_RELEASE); return 0; }
+{
+    if (!m) return EINVAL;
+    _mtab_ready();
+    EnterCriticalSection(&g_mtab_cs);
+    int i = _mtab_find((void*)m);
+    if (i >= 0 && g_mtab[i].depth > 0){
+        if (--g_mtab[i].depth == 0){ g_mtab[i].owner = 0; __atomic_store_n(m, 0, __ATOMIC_RELEASE); }
+    } else {
+        __atomic_store_n(m, 0, __ATOMIC_RELEASE);  /* was locked without a table entry */
+    }
+    LeaveCriticalSection(&g_mtab_cs); return 0;
+}
 static int __attribute__((sysv_abi)) _bionic_mutex_timedlock(volatile int32_t *m, const struct timespec *ts)
 { (void)ts; return _bionic_mutex_lock(m); }
 
@@ -145,7 +196,7 @@ struct _bionic_thread_tramp { void *(*fn)(void *); void *arg; };
 static void *_bionic_thread_entry(void *p){ struct _bionic_thread_tramp *t=(struct _bionic_thread_tramp*)p;
   void*(__attribute__((sysv_abi))*fn)(void*)=(void*(__attribute__((sysv_abi))*)(void*))t->fn; void*arg=t->arg; free(t); return fn(arg); }
 static int __attribute__((sysv_abi)) _bionic_pthread_create(void *tid,const void *attr,void *(*fn)(void*),void *arg)
-{ (void)attr; struct _bionic_thread_tramp *t=(struct _bionic_thread_tramp*)malloc(sizeof *t); if(!t) return EAGAIN;
+{ (void)attr; fprintf(stderr,"[pthread_create] fn=%p\n",(void*)(uintptr_t)fn); struct _bionic_thread_tramp *t=(struct _bionic_thread_tramp*)malloc(sizeof *t); if(!t) return EAGAIN;
   t->fn=fn; t->arg=arg; int rc=pthread_create((pthread_t*)tid,NULL,_bionic_thread_entry,t); if(rc)free(t); return rc; }
 static void *__attribute__((sysv_abi)) _bionic_getspecific(pthread_key_t k){return pthread_getspecific(k);}
 static int __attribute__((sysv_abi)) _bionic_pthread_kill(pthread_t th,int sig){(void)th;(void)sig;return 0;}
@@ -228,10 +279,17 @@ static long __attribute__((sysv_abi)) _sysv_time(long *t){ time_t r=time(NULL); 
  * guard, which crashed locale initialization. Provide Windows-safe stand-ins.
  * Fixed 6-arg prototype: SysV passes the first 6 args in registers, so this
  * reads them correctly no matter how many the caller actually supplied. */
-static long __attribute__((sysv_abi)) _sysv_sched_yield(void){ SwitchToThread(); return 0; }
+static long __attribute__((sysv_abi)) _sysv_sched_yield(void){
+    static volatile long yc=0; long c=++yc;
+    if ((c%200000)==1) fprintf(stderr,"[sched_yield] call #%ld ra=%p\n", c, __builtin_return_address(0));
+    SwitchToThread(); return 0;
+}
 static long __attribute__((sysv_abi)) _sysv_nanosleep(const long *req, long *rem){
   (void)rem;
   if (req){ long long ms = (long long)req[0]*1000 + req[1]/1000000;
+            static volatile long nc=0; long c=++nc;
+            if ((c%200000)==1) fprintf(stderr,"[nanosleep] #%ld sec=%lld nsec=%lld ms=%lld ra=%p\n",
+                                       c,(long long)req[0],(long long)req[1],ms,__builtin_return_address(0));
             if (ms < 0) ms = 0; if (ms == 0 && (req[0]||req[1])) ms = 1; Sleep((DWORD)ms); }
   return 0;
 }
@@ -263,17 +321,83 @@ static long __attribute__((sysv_abi)) _sysv_clock_getres(int clk, long long *res
 static long __attribute__((sysv_abi)) _sysv_syscall(long n, long a1, long a2, long a3, long a4, long a5){
   (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
   switch (n) {
-    case 24:  SwitchToThread(); return 0;                 /* __NR_sched_yield */
+    case 24:  { static volatile long yc=0; long c=++yc; if((c%200000)==1) fprintf(stderr,"[syscall sched_yield] #%ld ra=%p\n",c,__builtin_return_address(0)); SwitchToThread(); return 0; }  /* __NR_sched_yield */
     case 35:  return _sysv_nanosleep((const long*)a1,(long*)a2); /* __NR_nanosleep */
     case 39:  return (long)GetCurrentProcessId();          /* __NR_getpid */
     case 186: return (long)GetCurrentThreadId();           /* __NR_gettid */
-    case 202: return 0;  /* __NR_futex: single-threaded init — wake is a no-op,
-                            a wait returns "woken" so the caller re-checks. */
+    case 202: { static volatile long fc=0; long c=++fc; if((c%200000)==1) fprintf(stderr,"[futex] call #%ld op=%ld uaddr=%p\n",c,a2,(void*)a1); return 0; }  /* __NR_futex: diagnostic spin counter */
     case 234: return 0;                                    /* __NR_tgkill */
     default:  errno = 38 /*ENOSYS*/; return -1;
   }
 }
 static int *__attribute__((sysv_abi)) _win32_errno_location(void){ return _errno(); }
+
+/* ── POSIX file I/O: bionic's open/read/close/lseek are raw Linux syscalls that
+ * fail on Windows. Route them through the host CRT, and synthesize /dev/urandom
+ * and /dev/random from the Windows system RNG (std::random_device needs it). ── */
+extern unsigned char __stdcall SystemFunction036(void *buf, unsigned long len); /* RtlGenRandom, advapi32 */
+static int   g_ur[64];
+static volatile long g_urn = 0;
+static int _is_ur(int fd){ for (long i=0;i<g_urn;i++) if (g_ur[i]==fd) return 1; return 0; }
+static int __attribute__((sysv_abi)) _sysv_open(const char *path, int bflags, int mode){
+    if ((uintptr_t)path < 0x10000u) return -1;
+    if (!strcmp(path,"/dev/urandom") || !strcmp(path,"/dev/random")){
+        int fd = _open("NUL", _O_RDONLY | _O_BINARY);
+        if (fd >= 0){ long i = g_urn; if (i < 64){ g_ur[i] = fd; g_urn = i + 1; } }
+        return fd;
+    }
+    int wf = (bflags & 3);        /* O_RDONLY/WRONLY/RDWR = 0/1/2 on both */
+    if (bflags & 0100)  wf |= _O_CREAT;   /* O_CREAT  */
+    if (bflags & 01000) wf |= _O_TRUNC;   /* O_TRUNC  */
+    if (bflags & 0200)  wf |= _O_EXCL;    /* O_EXCL   */
+    if (bflags & 02000) wf |= _O_APPEND;  /* O_APPEND */
+    wf |= _O_BINARY;
+    return _open(path, wf, mode ? mode : 0666);
+}
+static int __attribute__((sysv_abi)) _sysv_openat(int dirfd, const char *path, int bflags, int mode){
+    (void)dirfd;  /* AT_FDCWD only; the guest uses absolute/base-relative paths */
+    return _sysv_open(path, bflags, mode);
+}
+/* bionic _FORTIFY_SOURCE open: int __open_2(const char*, int). libc++'s
+ * random_device uses this, not open(). */
+static int __attribute__((sysv_abi)) _sysv_open_2(const char *path, int bflags){
+    return _sysv_open(path, bflags, 0);
+}
+static long __attribute__((sysv_abi)) _sysv_read(int fd, void *buf, size_t n){
+    if (_is_ur(fd)){ if (!SystemFunction036(buf,(unsigned long)n)) return -1; return (long)n; }
+    return _read(fd, buf, (unsigned)n);
+}
+static long __attribute__((sysv_abi)) _sysv_write(int fd, const void *buf, size_t n){ return _write(fd, buf, (unsigned)n); }
+static int __attribute__((sysv_abi)) _sysv_close(int fd){
+    for (long i=0;i<g_urn;i++) if (g_ur[i]==fd){ g_ur[i]=g_ur[--g_urn]; break; }
+    return _close(fd);
+}
+static long long __attribute__((sysv_abi)) _sysv_lseek(int fd, long long off, int whence){
+    if (_is_ur(fd)) return 0;
+    return _lseeki64(fd, off, whence);
+}
+
+/* Diagnostic: log the C++ exception type when guest code throws, then abort.
+ * A guest throw can't unwind through the host (Windows PE) frames of the wrapper
+ * anyway, so this reports the type instead of crashing opaquely in the unwinder. */
+static void __attribute__((sysv_abi)) _log_cxa_throw(void *exc, void *tinfo, void *dtor){
+    (void)dtor;
+    const char *nm = "(null type_info)";
+    if (tinfo) { const char *n = *(const char * const *)((const char *)tinfo + 8); if (n) nm = n; }
+    fprintf(stderr, "[cxa_throw] type=%s exc=%p\n", nm, exc);
+    /* std::runtime_error/system_error: a message char* at +8, and for
+     * system_error an error_code {int __val_; category*} at +16. */
+    if (exc) {
+        const char *msg = *(const char * const *)((const char *)exc + 8);
+        int val = *(const int *)((const char *)exc + 16);
+        if (msg && (uintptr_t)msg >= 0x10000)
+            fprintf(stderr, "[cxa_throw]   what=\"%s\" code=%d\n", msg, val);
+        else
+            fprintf(stderr, "[cxa_throw]   code=%d\n", val);
+    }
+    fflush(stderr);
+    abort();
+}
 
 /* ── mmap family (guest -> VirtualAlloc, sysv_abi) ──────────────────────── */
 static DWORD _mprot(int prot){ if(prot==0)return PAGE_NOACCESS; if(prot&4)return (prot&2)?PAGE_EXECUTE_READWRITE:PAGE_EXECUTE_READ; if(prot&2)return PAGE_READWRITE; if(prot&1)return PAGE_READONLY; return PAGE_NOACCESS; }
@@ -387,6 +511,12 @@ static const struct _w32_hook win32_hooks[] = {
      * which reads an uninitialised thread pointer and returns a bogus pointer. */
     HA(__errno,_win32_errno_location),
     HA(__errno_location,_win32_errno_location),
+    HA(__cxa_throw,_log_cxa_throw),  /* diagnostic: log thrown C++ exception type */
+    /* POSIX file I/O via the host CRT; /dev/urandom from the Windows RNG. */
+    HA(open,_sysv_open), HA(open64,_sysv_open), HA(openat,_sysv_openat),
+    HA(__open_2,_sysv_open_2),
+    HA(read,_sysv_read), HA(write,_sysv_write), HA(close,_sysv_close),
+    HA(lseek,_sysv_lseek), HA(lseek64,_sysv_lseek),
 
     /* math (FP args pass in XMM identically across ABIs — raw host OK) */
     H(sin), H(cos), H(tan), H(asin), H(acos), H(atan), H(atan2),
