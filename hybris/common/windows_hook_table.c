@@ -30,6 +30,8 @@
 #include <malloc.h>
 #include <io.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <direct.h>
 #include <time.h>
 
 /* Win32 pthread wrappers (static functions). */
@@ -146,26 +148,33 @@ static int __attribute__((sysv_abi)) _bionic_pthread_once(volatile int32_t *once
  * bionic cond_t is 48B inline; store an 8-byte impl pointer in it.  cond_wait
  * releases/reacquires the bionic spinlock mutex around the wait. */
 typedef struct _bionic_cond_impl { CRITICAL_SECTION cs; CONDITION_VARIABLE cv; } _bionic_cond_impl_t;
+/* libc++'s std::condition_variable is statically zero-initialized
+ * (PTHREAD_COND_INITIALIZER) and never passes through pthread_cond_init, so the
+ * impl pointer stored in the bionic cond_t is 0 on first use. Create it lazily
+ * under g_mtab_cs instead of failing with EINVAL (which made cond_wait throw
+ * "condition_variable wait failed: Invalid argument"). */
+static _bionic_cond_impl_t *_cond_get(void *cond)
+{ if (!cond) return NULL; _mtab_ready(); EnterCriticalSection(&g_mtab_cs);
+  _bionic_cond_impl_t *d = (_bionic_cond_impl_t *)(*(uintptr_t *)cond);
+  if (!d){ d = (_bionic_cond_impl_t *)malloc(sizeof *d);
+    if (d){ InitializeCriticalSection(&d->cs); InitializeConditionVariable(&d->cv); *(uintptr_t *)cond = (uintptr_t)d; } }
+  LeaveCriticalSection(&g_mtab_cs); return d; }
 static int __attribute__((sysv_abi)) _bionic_cond_init(void *cond, const void *attr)
-{ if (!cond) return EINVAL; (void)attr; _bionic_cond_impl_t *d = (_bionic_cond_impl_t *)malloc(sizeof *d);
-  if (!d) return ENOMEM; InitializeCriticalSection(&d->cs); InitializeConditionVariable(&d->cv);
-  *(uintptr_t *)cond = (uintptr_t)d; return 0; }
+{ if (!cond) return EINVAL; (void)attr; return _cond_get(cond) ? 0 : ENOMEM; }
 static int __attribute__((sysv_abi)) _bionic_cond_destroy(void *cond)
 { if (!cond) return EINVAL; _bionic_cond_impl_t *d = (_bionic_cond_impl_t *)(*(uintptr_t *)cond);
   if (!d) return 0; DeleteCriticalSection(&d->cs); free(d); *(uintptr_t *)cond = 0; return 0; }
 static int __attribute__((sysv_abi)) _bionic_cond_signal(void *cond)
-{ if (!cond) return EINVAL; _bionic_cond_impl_t *d = (_bionic_cond_impl_t *)(*(uintptr_t *)cond);
-  if (!d) return EINVAL; WakeConditionVariable(&d->cv); return 0; }
+{ _bionic_cond_impl_t *d = _cond_get(cond); if (!d) return EINVAL; WakeConditionVariable(&d->cv); return 0; }
 static int __attribute__((sysv_abi)) _bionic_cond_broadcast(void *cond)
-{ if (!cond) return EINVAL; _bionic_cond_impl_t *d = (_bionic_cond_impl_t *)(*(uintptr_t *)cond);
-  if (!d) return EINVAL; WakeAllConditionVariable(&d->cv); return 0; }
+{ _bionic_cond_impl_t *d = _cond_get(cond); if (!d) return EINVAL; WakeAllConditionVariable(&d->cv); return 0; }
 static int __attribute__((sysv_abi)) _bionic_cond_wait(void *cond, volatile int32_t *m)
-{ if (!cond || !m) return EINVAL; _bionic_cond_impl_t *d = (_bionic_cond_impl_t *)(*(uintptr_t *)cond);
+{ if (!m) return EINVAL; _bionic_cond_impl_t *d = _cond_get(cond);
   if (!d) return EINVAL; _bionic_mutex_unlock(m); EnterCriticalSection(&d->cs);
   SleepConditionVariableCS(&d->cv, &d->cs, INFINITE); LeaveCriticalSection(&d->cs);
   _bionic_mutex_lock(m); return 0; }
 static int __attribute__((sysv_abi)) _bionic_cond_timedwait(void *cond, volatile int32_t *m, const struct timespec *ts)
-{ if (!cond || !m) return EINVAL; _bionic_cond_impl_t *d = (_bionic_cond_impl_t *)(*(uintptr_t *)cond);
+{ if (!m) return EINVAL; _bionic_cond_impl_t *d = _cond_get(cond);
   if (!d) return EINVAL; DWORD ms = INFINITE;
   if (ts) { struct timespec now; clock_gettime(CLOCK_REALTIME, &now);
     long long diff = ((long long)ts->tv_sec - now.tv_sec) * 1000LL + ((long long)ts->tv_nsec - now.tv_nsec) / 1000000LL;
@@ -339,6 +348,30 @@ extern unsigned char __stdcall SystemFunction036(void *buf, unsigned long len); 
 static int   g_ur[64];
 static volatile long g_urn = 0;
 static int _is_ur(int fd){ for (long i=0;i<g_urn;i++) if (g_ur[i]==fd) return 1; return 0; }
+/* libmediaplatform hands its SQLite/FairPlay paths to us as POSIX-absolute
+ * "/C:/Users/..." (see drm_posix_path in drm/native/main.c): the leading '/'
+ * keeps the bionic unix VFS on its absolute branch. Strip that one slash so the
+ * real Win32 call sees "C:/Users/...". Only a genuine drive-letter path
+ * ("/<L>:...") is touched; real bionic paths (/dev, /proc, /data) are left
+ * alone, since none has ':' at index 2. */
+static const char *_winpath(const char *p){
+    if (p && p[0]=='/' && ((p[1]>='A'&&p[1]<='Z')||(p[1]>='a'&&p[1]<='z')) && p[2]==':')
+        return p + 1;
+    return p;
+}
+/* Env-gated (ADAM_DB_DEBUG) tracing of the SQLite/file-op layer. */
+static int _dbg(void){ static int v=-1; if(v<0){ char b[8]; DWORD n=GetEnvironmentVariableA("ADAM_DB_DEBUG",b,sizeof b); v=(n>0 && n<sizeof b && b[0] && b[0]!='0')?1:0; } return v; }
+/* Write via the raw Win32 stderr handle, bypassing q.so's CRT stdio (whose
+ * FILE* may not be wired to the inherited/redirected OS handle). */
+static void _dbgw(const char *fmt, ...){
+    if(!_dbg()) return;
+    char b[512]; int p=0;
+    b[p++]='['; b[p++]='d'; b[p++]='b'; b[p++]='g'; b[p++]=']'; b[p++]=' ';
+    va_list ap; va_start(ap,fmt);
+    int n=vsnprintf(b+p,sizeof(b)-p,fmt,ap); va_end(ap);
+    if(n>0){ DWORD wr; WriteFile(GetStdHandle(STD_ERROR_HANDLE), b, (DWORD)(p+n), &wr, NULL); }
+}
+#define DBG(...) _dbgw(__VA_ARGS__)
 static int __attribute__((sysv_abi)) _sysv_open(const char *path, int bflags, int mode){
     if ((uintptr_t)path < 0x10000u) return -1;
     if (!strcmp(path,"/dev/urandom") || !strcmp(path,"/dev/random")){
@@ -352,7 +385,9 @@ static int __attribute__((sysv_abi)) _sysv_open(const char *path, int bflags, in
     if (bflags & 0200)  wf |= _O_EXCL;    /* O_EXCL   */
     if (bflags & 02000) wf |= _O_APPEND;  /* O_APPEND */
     wf |= _O_BINARY;
-    return _open(path, wf, mode ? mode : 0666);
+    int rfd = _open(_winpath(path), wf, mode ? mode : 0666);
+    DBG("open(\"%s\" bflags=0%o) -> fd=%d errno=%d\n", path, bflags, rfd, rfd<0?errno:0);
+    return rfd;
 }
 static int __attribute__((sysv_abi)) _sysv_openat(int dirfd, const char *path, int bflags, int mode){
     (void)dirfd;  /* AT_FDCWD only; the guest uses absolute/base-relative paths */
@@ -376,6 +411,58 @@ static long long __attribute__((sysv_abi)) _sysv_lseek(int fd, long long off, in
     if (_is_ur(fd)) return 0;
     return _lseeki64(fd, off, whence);
 }
+/* SQLite's unix VFS needs more file ops. Fill bionic's x86-64 struct stat layout
+ * (st_dev@0, st_ino@8, st_nlink@16, st_mode@24, st_rdev@40, st_size@48,
+ * st_blksize@56, st_blocks@64, st_atim@72, st_mtim@88, st_ctim@104; 144 bytes). */
+static void _fill_bionic_stat(void *bst, const struct _stat64 *w){
+    unsigned char *p = (unsigned char*)bst; memset(p, 0, 144);
+    *(unsigned long long*)(p+0)  = (unsigned long long)w->st_dev;
+    *(unsigned long long*)(p+8)  = w->st_ino ? (unsigned long long)w->st_ino : 1ULL;
+    *(unsigned long long*)(p+16) = w->st_nlink ? (unsigned long long)w->st_nlink : 1ULL;
+    *(unsigned int*)(p+24)       = (unsigned int)w->st_mode;
+    *(unsigned long long*)(p+40) = (unsigned long long)w->st_rdev;
+    *(long long*)(p+48)          = (long long)w->st_size;
+    *(long long*)(p+56)          = 4096;
+    *(long long*)(p+64)          = ((long long)w->st_size + 511) / 512;
+    *(long long*)(p+72)          = (long long)w->st_atime;
+    *(long long*)(p+88)          = (long long)w->st_mtime;
+    *(long long*)(p+104)         = (long long)w->st_ctime;
+}
+static int __attribute__((sysv_abi)) _sysv_fstat(int fd, void *bst){
+    struct _stat64 w; if (_fstat64(fd, &w) != 0) return -1; _fill_bionic_stat(bst, &w); return 0;
+}
+static int __attribute__((sysv_abi)) _sysv_stat(const char *path, void *bst){
+    if ((uintptr_t)path < 0x10000u) return -1;
+    struct _stat64 w; int rc=_stat64(_winpath(path), &w); DBG("stat(\"%s\") -> %d errno=%d size=%lld\n", path, rc, rc?errno:0, rc?0:(long long)w.st_size); if (rc != 0) return -1; _fill_bionic_stat(bst, &w); return 0;
+}
+static long __attribute__((sysv_abi)) _sysv_pread64(int fd, void *buf, size_t n, long long off){
+    if (_is_ur(fd)){ if (!SystemFunction036(buf,(unsigned long)n)) return -1; return (long)n; }
+    HANDLE h = (HANDLE)(intptr_t)_get_osfhandle(fd); if (h==INVALID_HANDLE_VALUE) return -1;
+    OVERLAPPED ov; memset(&ov,0,sizeof ov); ov.Offset=(DWORD)off; ov.OffsetHigh=(DWORD)(off>>32);
+    DWORD got=0; if (!ReadFile(h, buf, (DWORD)n, &got, &ov)){ if (GetLastError()==ERROR_HANDLE_EOF) return 0; return -1; }
+    return (long)got;
+}
+static long __attribute__((sysv_abi)) _sysv_pwrite64(int fd, const void *buf, size_t n, long long off){
+    HANDLE h = (HANDLE)(intptr_t)_get_osfhandle(fd); if (h==INVALID_HANDLE_VALUE) return -1;
+    OVERLAPPED ov; memset(&ov,0,sizeof ov); ov.Offset=(DWORD)off; ov.OffsetHigh=(DWORD)(off>>32);
+    DWORD put=0; if (!WriteFile(h, buf, (DWORD)n, &put, &ov)) return -1; return (long)put;
+}
+/* fcntl: single-process, so advisory locks always succeed; F_GETLK(5) reports no
+ * conflicting lock (l_type = F_UNLCK = 2 at offset 0 of struct flock). */
+static int __attribute__((sysv_abi)) _sysv_fcntl(int fd, int cmd, void *arg){
+    (void)fd;
+    DBG("fcntl(fd=%d cmd=%d)\n", fd, cmd);
+    if (cmd == 5 && arg) *(short*)arg = 2;
+    return 0;
+}
+static int __attribute__((sysv_abi)) _sysv_access(const char *p, int m){ if((uintptr_t)p<0x10000u) return -1; return _access(_winpath(p), m & 06); }
+static int __attribute__((sysv_abi)) _sysv_fsync(int fd){ _commit(fd); return 0; }
+static int __attribute__((sysv_abi)) _sysv_ftruncate(int fd, long long len){ return _chsize_s(fd, len)==0 ? 0 : -1; }
+static char *__attribute__((sysv_abi)) _sysv_getcwd(char *buf, size_t size){ return _getcwd(buf, (int)size); }
+static int __attribute__((sysv_abi)) _sysv_mkdir(const char *p, int mode){ (void)mode; if((uintptr_t)p<0x10000u) return -1; return _mkdir(_winpath(p)); }
+static int __attribute__((sysv_abi)) _sysv_unlink(const char *p){ if((uintptr_t)p<0x10000u) return -1; return _unlink(_winpath(p)); }
+static int __attribute__((sysv_abi)) _sysv_fchmod(int fd,int m){(void)fd;(void)m;return 0;}
+static int __attribute__((sysv_abi)) _sysv_fchown(int fd,int u,int g){(void)fd;(void)u;(void)g;return 0;}
 
 /* Diagnostic: log the C++ exception type when guest code throws, then abort.
  * A guest throw can't unwind through the host (Windows PE) frames of the wrapper
@@ -385,15 +472,20 @@ static void __attribute__((sysv_abi)) _log_cxa_throw(void *exc, void *tinfo, voi
     const char *nm = "(null type_info)";
     if (tinfo) { const char *n = *(const char * const *)((const char *)tinfo + 8); if (n) nm = n; }
     fprintf(stderr, "[cxa_throw] type=%s exc=%p\n", nm, exc);
-    /* std::runtime_error/system_error: a message char* at +8, and for
-     * system_error an error_code {int __val_; category*} at +16. */
+    /* Dump the exception object's first words; interpret pointer-looking ones as
+     * strings (works for runtime_error/system_error and Apple's ErrorCondition). */
     if (exc) {
-        const char *msg = *(const char * const *)((const char *)exc + 8);
-        int val = *(const int *)((const char *)exc + 16);
-        if (msg && (uintptr_t)msg >= 0x10000)
-            fprintf(stderr, "[cxa_throw]   what=\"%s\" code=%d\n", msg, val);
-        else
-            fprintf(stderr, "[cxa_throw]   code=%d\n", val);
+        const unsigned long long *w = (const unsigned long long *)exc;
+        for (int i = 0; i < 8; i++) {
+            unsigned long long v = w[i];
+            if (v >= 0x10000 && v < 0x00007fffffffffffULL){
+                const char *s = (const char *)(uintptr_t)v;
+                int printable = 1;
+                for (int k = 0; k < 24; k++){ unsigned char c = (unsigned char)s[k]; if (c==0) break; if (c<0x20||c>0x7e){ printable=0; break; } }
+                if (printable && s[0]) { fprintf(stderr, "[cxa_throw]   [%d]=%016llx -> \"%.48s\"\n", i, v, s); continue; }
+            }
+            fprintf(stderr, "[cxa_throw]   [%d]=%016llx\n", i, v);
+        }
     }
     fflush(stderr);
     abort();
@@ -402,11 +494,36 @@ static void __attribute__((sysv_abi)) _log_cxa_throw(void *exc, void *tinfo, voi
 /* ── mmap family (guest -> VirtualAlloc, sysv_abi) ──────────────────────── */
 static DWORD _mprot(int prot){ if(prot==0)return PAGE_NOACCESS; if(prot&4)return (prot&2)?PAGE_EXECUTE_READWRITE:PAGE_EXECUTE_READ; if(prot&2)return PAGE_READWRITE; if(prot&1)return PAGE_READONLY; return PAGE_NOACCESS; }
 static void *__attribute__((sysv_abi)) _sysv_mmap(void *addr,size_t len,int prot,int flags,int fd,long long off)
-{ (void)fd;(void)off; if(len==0)return (void*)-1;
+{ if(len==0)return (void*)-1;
+  /* File-backed mmap (fd>=0, not MAP_ANONYMOUS=0x20): map the real file through
+     a Windows section. SQLite's WAL uses a MAP_SHARED mapping of the "-shm"
+     wal-index file and cannot proceed if it fails. CreateFileMapping with
+     max-size 0 covers the current file size (SQLite ftruncates the -shm first);
+     the view stays valid after the mapping handle is closed. off must be
+     allocation-granularity aligned, which SQLite's offset 0 satisfies. */
+  if(fd>=0 && !(flags&0x20)){
+    HANDLE fh=(HANDLE)(intptr_t)_get_osfhandle(fd);
+    if(fh==INVALID_HANDLE_VALUE){ DBG("mmap fd=%d bad handle\n",fd); return (void*)-1; }
+    DWORD pm=(prot&2)?PAGE_READWRITE:PAGE_READONLY;
+    DWORD acc=(prot&2)?FILE_MAP_WRITE:FILE_MAP_READ;
+    HANDLE hm=CreateFileMappingA(fh,NULL,pm,0,0,NULL);
+    if(!hm){ DBG("mmap CreateFileMapping fd=%d gle=%lu\n",fd,GetLastError()); return (void*)-1; }
+    void *v=MapViewOfFile(hm,acc,(DWORD)(off>>32),(DWORD)off,len);
+    CloseHandle(hm);
+    if(!v){ DBG("mmap MapViewOfFile fd=%d len=%zu off=%lld gle=%lu\n",fd,len,off,GetLastError()); return (void*)-1; }
+    DBG("mmap file fd=%d len=%zu off=%lld -> %p\n",fd,len,off,v);
+    return v;
+  }
+  (void)off;
   if(prot==0){ void*r=VirtualAlloc(addr,len,MEM_RESERVE,PAGE_NOACCESS); if(!r&&addr)r=VirtualAlloc(NULL,len,MEM_RESERVE,PAGE_NOACCESS); return r?r:(void*)-1; }
   DWORD wp=_mprot(prot); void*r; if(flags&0x10){ r=VirtualAlloc(addr,len,MEM_COMMIT,wp); if(r)return r; }
   r=VirtualAlloc(addr,len,MEM_RESERVE|MEM_COMMIT,wp); if(!r)r=VirtualAlloc(NULL,len,MEM_RESERVE|MEM_COMMIT,wp); return r?r:(void*)-1; }
-static int __attribute__((sysv_abi)) _sysv_munmap(void *addr,size_t len){ if(VirtualFree(addr,len,MEM_DECOMMIT))return 0; return VirtualFree(addr,0,MEM_RELEASE)?0:-1; }
+static int __attribute__((sysv_abi)) _sysv_munmap(void *addr,size_t len){
+  /* A file-backed mapping (from _sysv_mmap) must be released with
+     UnmapViewOfFile; it fails harmlessly on a VirtualAlloc'd region, so try it
+     first, then fall back to the anonymous-memory path. */
+  if(UnmapViewOfFile(addr))return 0;
+  if(VirtualFree(addr,len,MEM_DECOMMIT))return 0; return VirtualFree(addr,0,MEM_RELEASE)?0:-1; }
 static int __attribute__((sysv_abi)) _sysv_mprotect(void *addr,size_t len,int prot){ DWORD old; DWORD wp=_mprot(prot); MEMORY_BASIC_INFORMATION mbi;
   if(VirtualQuery(addr,&mbi,sizeof(mbi))&&mbi.State==MEM_RESERVE)return VirtualAlloc(addr,len,MEM_COMMIT,wp)?0:-1; return VirtualProtect(addr,len,wp,&old)?0:-1; }
 
@@ -517,6 +634,12 @@ static const struct _w32_hook win32_hooks[] = {
     HA(__open_2,_sysv_open_2),
     HA(read,_sysv_read), HA(write,_sysv_write), HA(close,_sysv_close),
     HA(lseek,_sysv_lseek), HA(lseek64,_sysv_lseek),
+    HA(fstat,_sysv_fstat), HA(stat,_sysv_stat),
+    HA(pread64,_sysv_pread64), HA(pwrite64,_sysv_pwrite64),
+    HA(fcntl,_sysv_fcntl), HA(access,_sysv_access),
+    HA(fsync,_sysv_fsync), HA(fdatasync,_sysv_fsync), HA(ftruncate,_sysv_ftruncate),
+    HA(getcwd,_sysv_getcwd), HA(mkdir,_sysv_mkdir), HA(unlink,_sysv_unlink),
+    HA(fchmod,_sysv_fchmod), HA(fchown,_sysv_fchown),
 
     /* math (FP args pass in XMM identically across ABIs — raw host OK) */
     H(sin), H(cos), H(tan), H(asin), H(acos), H(atan), H(atan2),
