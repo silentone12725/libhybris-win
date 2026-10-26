@@ -438,6 +438,24 @@ static int __attribute__((sysv_abi)) _sysv_stat(const char *path, void *bst){
     if ((uintptr_t)path < 0x10000u) return -1;
     struct _stat64 w; int rc=_stat64(_winpath(path), &w); DBG("stat(\"%s\") -> %d errno=%d size=%lld\n", path, rc, rc?errno:0, rc?0:(long long)w.st_size); if (rc != 0) return -1; _fill_bionic_stat(bst, &w); return 0;
 }
+/* Windows has no POSIX symlinks here, so lstat == stat. SQLite's
+ * unixFullPathname resolves symlinks with lstat/readlink; left unhooked these
+ * fall through to bionic's raw Linux syscalls and return garbage, making path
+ * resolution fail nondeterministically (SQLITE_CANTOPEN). */
+static int __attribute__((sysv_abi)) _sysv_lstat(const char *path, void *bst){
+    return _sysv_stat(path, bst);
+}
+/* readlink: resolve /proc/self/exe to the real executable path (bionic code
+ * uses it to locate the app); for any other path report "not a symlink"
+ * (EINVAL) so SQLite's unixFullPathname stops resolving and uses it as-is. */
+static long __attribute__((sysv_abi)) _sysv_readlink(const char *path, char *buf, size_t sz){
+    if (path && !strcmp(path, "/proc/self/exe")){
+        DWORD n = GetModuleFileNameA(NULL, buf, (DWORD)sz);
+        DBG("readlink(\"/proc/self/exe\") -> %lu\n", (unsigned long)n);
+        return (n == 0 || n >= sz) ? -1 : (long)n;
+    }
+    errno = EINVAL; DBG("readlink(\"%s\") -> -1 (EINVAL)\n", path?path:"(null)"); return -1;
+}
 static long __attribute__((sysv_abi)) _sysv_pread64(int fd, void *buf, size_t n, long long off){
     if (_is_ur(fd)){ if (!SystemFunction036(buf,(unsigned long)n)) return -1; return (long)n; }
     HANDLE h = (HANDLE)(intptr_t)_get_osfhandle(fd); if (h==INVALID_HANDLE_VALUE) return -1;
@@ -648,7 +666,7 @@ static const struct _w32_hook win32_hooks[] = {
     HA(__open_2,_sysv_open_2),
     HA(read,_sysv_read), HA(write,_sysv_write), HA(close,_sysv_close),
     HA(lseek,_sysv_lseek), HA(lseek64,_sysv_lseek),
-    HA(fstat,_sysv_fstat), HA(stat,_sysv_stat),
+    HA(fstat,_sysv_fstat), HA(stat,_sysv_stat), HA(lstat,_sysv_lstat), HA(readlink,_sysv_readlink),
     HA(pread64,_sysv_pread64), HA(pwrite64,_sysv_pwrite64),
     HA(fcntl,_sysv_fcntl), HA(access,_sysv_access),
     HA(fsync,_sysv_fsync), HA(fdatasync,_sysv_fsync), HA(ftruncate,_sysv_ftruncate),
