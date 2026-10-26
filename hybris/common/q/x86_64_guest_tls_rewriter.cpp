@@ -282,6 +282,12 @@ size_t instruction_length(const Byte* p) {
     case 0x30: case 0x31: case 0x32: case 0x33:
     case 0x38: case 0x39: case 0x3a: case 0x3b:
     case 0x63: case 0x8b: case 0x89: case 0x8d: case 0x85: case 0xfe: case 0xff:
+    // 8-bit and other ModRM-only forms (no immediate). 0x88 (mov r/m8,r8) sits
+    // between a function's two stack-guard fs: accesses; without it the sweep
+    // desynced and left the second fs:0x28 load unrewritten (faults at 0x28 on
+    // a thread whose fs base is 0). 0x84 test, 0x86/0x87 xchg, 0x8a mov r8,r/m8,
+    // 0x8c/0x8e mov seg.
+    case 0x84: case 0x86: case 0x87: case 0x88: case 0x8a: case 0x8c: case 0x8e:
        has_modrm = true;
        break;
     case 0x80: case 0x81: case 0xc6: case 0xc7:

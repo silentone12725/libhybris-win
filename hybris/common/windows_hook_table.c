@@ -488,7 +488,7 @@ static int __attribute__((sysv_abi)) _sysv_fchown(int fd,int u,int g){(void)fd;(
 /* Diagnostic: log the C++ exception type when guest code throws, then abort.
  * A guest throw can't unwind through the host (Windows PE) frames of the wrapper
  * anyway, so this reports the type instead of crashing opaquely in the unwinder. */
-static void __attribute__((sysv_abi)) _log_cxa_throw(void *exc, void *tinfo, void *dtor){
+static void __attribute__((sysv_abi, unused)) _log_cxa_throw(void *exc, void *tinfo, void *dtor){
     (void)dtor;
     const char *nm = "(null type_info)";
     if (tinfo) { const char *n = *(const char * const *)((const char *)tinfo + 8); if (n) nm = n; }
@@ -660,7 +660,12 @@ static const struct _w32_hook win32_hooks[] = {
      * which reads an uninitialised thread pointer and returns a bogus pointer. */
     HA(__errno,_win32_errno_location),
     HA(__errno_location,_win32_errno_location),
-    HA(__cxa_throw,_log_cxa_throw),  /* diagnostic: log thrown C++ exception type */
+    /* __cxa_throw is intentionally NOT interposed: it must resolve to the guest
+     * libc++ so exceptions unwind natively through guest frames to Apple's own
+     * try/catch (lease error handling, retries). Interposing it inserted a host
+     * frame that broke DWARF unwinding, and the diagnostic variant abort()ed on
+     * every throw — turning catchable exceptions fatal. Re-add _log_cxa_throw
+     * temporarily only when tracing a specific throw. */
     /* POSIX file I/O via the host CRT; /dev/urandom from the Windows RNG. */
     HA(open,_sysv_open), HA(open64,_sysv_open), HA(openat,_sysv_openat),
     HA(__open_2,_sysv_open_2),
