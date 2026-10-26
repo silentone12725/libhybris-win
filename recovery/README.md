@@ -173,3 +173,28 @@ Current blocker: crash inside guest storeservicescore::RequestContext::init (cp1
 object (our wrapper sets its vtable up manually at cp2/cp3) or missing session/device
 data (base_dir C:\Users\Podman\drm_files is empty). Next: disassemble
 storeservicescore::RequestContext::init and check reqCtx/reqCtxCfg object layout+vtable.
+
+## cp15 blocker: guest C++ exception can't unwind through host frames (2026-10-26)
+Session data (drm/files: MUSIC_TOKEN, STOREFRONT_ID, mpl_db, adi.pb, device-id,
+IC-Info.sids, fsi.pdat, drm-state, session-ready) was copied to the VM's
+C:\Users\Podman\drm_files. It did NOT change the cp15 crash, so the crash is not a
+missing-data issue.
+
+storeservicescore::RequestContext::init (cp15) THROWS a C++ exception. The crash is
+inside the DWARF unwinder: _Unwind_RaiseException (libstoreservicescore ELF ~0x23d9dd)
+-> helper -> a DWARF op/parse routine (~0x23e40f) that does `cmp [rdx+0x28],0` with
+rdx = [rbp+8] = 0x20 (a frame's saved RIP read as garbage). Root cause: the wrapper
+calls init() DIRECTLY from host (Windows PE) code via the hybris_stubs trampoline, so
+when the guest throws there is no guest catch frame above init; the DWARF unwinder
+walks up into host frames (libdrm_client.dll / q.so) that have no .eh_frame and
+derails.
+
+Two ways forward:
+1. Find why init throws and prevent it (if it's a Windows-specific error: a hooked
+   file op on the Windows base_dir path, a bad hook return, etc.). Hook/intercept
+   __cxa_throw to log the thrown type_info name and message, and disassemble
+   storeservicescore::RequestContext::init (ELF 0x177d20) for its throw sites.
+2. Give the wrapper's throwing guest calls a guest-side try/catch shim (compiled
+   SysV/guest, registered with .eh_frame) so exceptions are caught in guest context
+   instead of unwinding into host frames.
+Option 1 is cheaper to try first (log the exception, see if it's an avoidable error).
