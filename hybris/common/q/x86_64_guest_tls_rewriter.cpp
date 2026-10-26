@@ -285,6 +285,14 @@ size_t instruction_length(const Byte* p) {
       // step over the following fs: access (e.g. a stack-guard load).
       immediate = (opcode == 0x80 || opcode == 0xc6) ? 1 : 4;
       break;
+    case 0x69:  // imul r, r/m, imm32
+      has_modrm = true;
+      immediate = 4;
+      break;
+    case 0x6b:  // imul r, r/m, imm8
+      has_modrm = true;
+      immediate = 1;
+      break;
     case 0xa9:
       return i + 4;
     case 0x25:
