@@ -39,11 +39,52 @@
 
 /* User-supplied fallback callback from windows_core_hooks.c. */
 extern hybris_hook_cb _hybris_win32_user_hook_cb;
+extern void *hybris_guest_thread_call(void *, void *);
 
 /* Android dl* functions from windows_core_hooks.c (Windows ABI). */
 extern void *android_dlopen(const char *, int);
 extern void *android_dlsym(void *, const char *);
 extern int   android_dlclose(void *);
+
+/* Winsock shim (hybris_net.c, sysv_abi). Socket fds live in a synthetic range
+ * so read/write/close/fcntl can route them to the socket path. */
+extern int  __attribute__((sysv_abi)) _net_is_fd(int fd);
+extern long __attribute__((sysv_abi)) _net_read(int, void *, size_t);
+extern long __attribute__((sysv_abi)) _net_write(int, const void *, size_t);
+extern int  __attribute__((sysv_abi)) _net_close(int);
+extern int  __attribute__((sysv_abi)) _net_fcntl(int, int, int);
+extern int  __attribute__((sysv_abi)) _net_socket(int, int, int);
+extern int  __attribute__((sysv_abi)) _net_connect(int, const void *, int);
+extern long __attribute__((sysv_abi)) _net_send(int, const void *, size_t, int);
+extern long __attribute__((sysv_abi)) _net_recv(int, void *, size_t, int);
+extern long __attribute__((sysv_abi)) _net_sendto(int, const void *, size_t, int, const void *, int);
+extern long __attribute__((sysv_abi)) _net_recvfrom(int, void *, size_t, int, void *, int *);
+extern int  __attribute__((sysv_abi)) _net_shutdown(int, int);
+extern int  __attribute__((sysv_abi)) _net_getpeername(int, void *, int *);
+extern int  __attribute__((sysv_abi)) _net_getsockname(int, void *, int *);
+extern int  __attribute__((sysv_abi)) _net_setsockopt(int, int, int, const void *, int);
+extern int  __attribute__((sysv_abi)) _net_getsockopt(int, int, int, void *, int *);
+extern int  __attribute__((sysv_abi)) _net_ioctl(int, unsigned long, void *);
+extern int  __attribute__((sysv_abi)) _net_poll(void *, unsigned long, int);
+extern int  __attribute__((sysv_abi)) _net_getaddrinfo(const char *, const char *, const void *, void **);
+extern void __attribute__((sysv_abi)) _net_freeaddrinfo(void *);
+extern int  __attribute__((sysv_abi)) _net_inet_pton(int, const char *, void *);
+extern const char *__attribute__((sysv_abi)) _net_inet_ntop(int, const void *, char *, unsigned int);
+extern int  __attribute__((sysv_abi)) _net_bind(int, const void *, int);
+extern int  __attribute__((sysv_abi)) _net_listen(int, int);
+extern int  __attribute__((sysv_abi)) _net_accept(int, void *, int *);
+extern int  __attribute__((sysv_abi)) _net_socketpair(int, int, int, int *);
+extern unsigned int __attribute__((sysv_abi)) _net_if_nametoindex(const char *);
+extern int  __attribute__((sysv_abi)) _net_epoll_create(int);
+extern int  __attribute__((sysv_abi)) _net_epoll_create1(int);
+extern int  __attribute__((sysv_abi)) _net_epoll_ctl(int, int, int, const void *);
+extern int  __attribute__((sysv_abi)) _net_epoll_wait(int, void *, int, int);
+extern int  __attribute__((sysv_abi)) _net_ppoll(void *, unsigned long, const void *, const void *);
+extern int  __attribute__((sysv_abi)) _net_select(int, void *, void *, void *, const void *);
+extern int  __attribute__((sysv_abi)) _net_eventfd(unsigned int, int);
+extern int  __attribute__((sysv_abi)) _net_eventfd_write(int, unsigned long long);
+extern int  __attribute__((sysv_abi)) _net_timerfd_create(int, int);
+extern int  __attribute__((sysv_abi)) _net_timerfd_settime(int, int, const void *, void *);
 extern char *android_dlerror(void);
 extern int   android_dladdr(const void *, void *);
 extern int   android_dl_iterate_phdr(int (*)(void *, size_t, void *), void *);
@@ -164,24 +205,37 @@ static int __attribute__((sysv_abi)) _bionic_cond_init(void *cond, const void *a
 static int __attribute__((sysv_abi)) _bionic_cond_destroy(void *cond)
 { if (!cond) return EINVAL; _bionic_cond_impl_t *d = (_bionic_cond_impl_t *)(*(uintptr_t *)cond);
   if (!d) return 0; DeleteCriticalSection(&d->cs); free(d); *(uintptr_t *)cond = 0; return 0; }
+/* Diagnostics (condition-variable, futex and libcurl tracing) are off unless ADAM_WTRACE is set. */
+static int _wtrace_on(void)
+{
+    static volatile int v = -1;
+    if (v < 0) v = getenv("ADAM_WTRACE") != NULL;
+    return v;
+}
+static volatile long g_wtrace_n;
 static int __attribute__((sysv_abi)) _bionic_cond_signal(void *cond)
-{ _bionic_cond_impl_t *d = _cond_get(cond); if (!d) return EINVAL; WakeConditionVariable(&d->cv); return 0; }
+{ _bionic_cond_impl_t *d = _cond_get(cond); if (!d) return EINVAL; if (_wtrace_on() && __atomic_load_n(&g_wtrace_n, __ATOMIC_RELAXED) < 3000) { fprintf(stderr, "[wtrace] cond_signal tid=%lu cond=%p ra=%p\n", GetCurrentThreadId(), cond, __builtin_return_address(0)); fflush(stderr); __atomic_fetch_add(&g_wtrace_n, 1, __ATOMIC_RELAXED); } WakeConditionVariable(&d->cv); return 0; }
 static int __attribute__((sysv_abi)) _bionic_cond_broadcast(void *cond)
-{ _bionic_cond_impl_t *d = _cond_get(cond); if (!d) return EINVAL; WakeAllConditionVariable(&d->cv); return 0; }
+{ _bionic_cond_impl_t *d = _cond_get(cond); if (!d) return EINVAL; if (_wtrace_on() && __atomic_load_n(&g_wtrace_n, __ATOMIC_RELAXED) < 3000) { fprintf(stderr, "[wtrace] cond_broadcast tid=%lu cond=%p ra=%p\n", GetCurrentThreadId(), cond, __builtin_return_address(0)); fflush(stderr); __atomic_fetch_add(&g_wtrace_n, 1, __ATOMIC_RELAXED); } WakeAllConditionVariable(&d->cv); return 0; }
+static volatile long g_wtrace_n = 0;
+#define WTRACE(...) do { if (_wtrace_on() && __atomic_fetch_add(&g_wtrace_n, 1, __ATOMIC_RELAXED) < 3000) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while (0)
 static int __attribute__((sysv_abi)) _bionic_cond_wait(void *cond, volatile int32_t *m)
 { if (!m) return EINVAL; _bionic_cond_impl_t *d = _cond_get(cond);
-  if (!d) return EINVAL; _bionic_mutex_unlock(m); EnterCriticalSection(&d->cs);
+  if (!d) return EINVAL; WTRACE("[wtrace] cond_wait tid=%lu cond=%p ENTER\n", GetCurrentThreadId(), cond);
+  _bionic_mutex_unlock(m); EnterCriticalSection(&d->cs);
   SleepConditionVariableCS(&d->cv, &d->cs, INFINITE); LeaveCriticalSection(&d->cs);
-  _bionic_mutex_lock(m); return 0; }
+  _bionic_mutex_lock(m); WTRACE("[wtrace] cond_wait tid=%lu cond=%p WOKE\n", GetCurrentThreadId(), cond); return 0; }
 static int __attribute__((sysv_abi)) _bionic_cond_timedwait(void *cond, volatile int32_t *m, const struct timespec *ts)
 { if (!m) return EINVAL; _bionic_cond_impl_t *d = _cond_get(cond);
   if (!d) return EINVAL; DWORD ms = INFINITE;
   if (ts) { struct timespec now; clock_gettime(CLOCK_REALTIME, &now);
     long long diff = ((long long)ts->tv_sec - now.tv_sec) * 1000LL + ((long long)ts->tv_nsec - now.tv_nsec) / 1000000LL;
-    if (diff <= 0) return ETIMEDOUT; ms = (DWORD)diff; }
+    if (diff <= 0) { WTRACE("[wtrace] cond_timedwait tid=%lu cond=%p deadline already past diff=%lld (sec=%lld nsec=%lld)\n", GetCurrentThreadId(), cond, diff, (long long)ts->tv_sec, (long long)ts->tv_nsec); return ETIMEDOUT; }
+    ms = (DWORD)diff; }
+  WTRACE("[wtrace] cond_timedwait tid=%lu cond=%p ms=%lu ENTER\n", GetCurrentThreadId(), cond, (unsigned long)ms);
   _bionic_mutex_unlock(m); EnterCriticalSection(&d->cs);
   BOOL ok = SleepConditionVariableCS(&d->cv, &d->cs, ms); LeaveCriticalSection(&d->cs);
-  _bionic_mutex_lock(m); return ok ? 0 : ETIMEDOUT; }
+  _bionic_mutex_lock(m); WTRACE("[wtrace] cond_timedwait tid=%lu cond=%p %s\n", GetCurrentThreadId(), cond, ok ? "WOKE" : "TIMEDOUT"); return ok ? 0 : ETIMEDOUT; }
 
 /* ── rwlock / attr / create (call-through / trampoline) ─────────────────── */
 static int __attribute__((sysv_abi)) _bionic_rwlock_init(void *rw, const void *a){(void)a;return pthread_rwlock_init((pthread_rwlock_t*)rw,NULL);}
@@ -205,7 +259,7 @@ struct _bionic_thread_tramp { void *(*fn)(void *); void *arg; };
 static void *_bionic_thread_entry(void *p){ struct _bionic_thread_tramp *t=(struct _bionic_thread_tramp*)p;
   void*(__attribute__((sysv_abi))*fn)(void*)=(void*(__attribute__((sysv_abi))*)(void*))t->fn; void*arg=t->arg; free(t);
   fprintf(stderr,"[thread-entry] fn=%p tid=%lu BEGIN\n",(void*)(uintptr_t)fn,(unsigned long)GetCurrentThreadId()); fflush(stderr);
-  void *r=fn(arg);
+   void *r=hybris_guest_thread_call((void *)(uintptr_t)fn, arg);
   fprintf(stderr,"[thread-entry] fn=%p tid=%lu END\n",(void*)(uintptr_t)fn,(unsigned long)GetCurrentThreadId()); fflush(stderr); return r; }
 static int __attribute__((sysv_abi)) _bionic_pthread_create(void *tid,const void *attr,void *(*fn)(void*),void *arg)
 { (void)attr; fprintf(stderr,"[pthread_create] fn=%p\n",(void*)(uintptr_t)fn); struct _bionic_thread_tramp *t=(struct _bionic_thread_tramp*)malloc(sizeof *t); if(!t) return EAGAIN;
@@ -337,9 +391,9 @@ static long __attribute__((sysv_abi)) _sysv_syscall(long n, long a1, long a2, lo
     case 35:  return _sysv_nanosleep((const long*)a1,(long*)a2); /* __NR_nanosleep */
     case 39:  return (long)GetCurrentProcessId();          /* __NR_getpid */
     case 186: return (long)GetCurrentThreadId();           /* __NR_gettid */
-    case 202: { static volatile long fc=0; long c=++fc; if((c%200000)==1) fprintf(stderr,"[futex] call #%ld op=%ld uaddr=%p\n",c,a2,(void*)a1); return 0; }  /* __NR_futex: diagnostic spin counter */
+    case 202: { static volatile long fc=0; long c=++fc; if(c<=60 && (a2&0x7f)!=1) WTRACE("[wtrace] futex #%ld tid=%lu op=%ld uaddr=%p val=%ld\n",c,GetCurrentThreadId(),a2,(void*)a1,a3); if((c%200000)==1) fprintf(stderr,"[futex] call #%ld op=%ld uaddr=%p\n",c,a2,(void*)a1); return 0; }  /* __NR_futex: diagnostic spin counter */
     case 234: return 0;                                    /* __NR_tgkill */
-    default:  errno = 38 /*ENOSYS*/; return -1;
+    default:  { static volatile long uc=0; long c=++uc; if(c<=80) { fprintf(stderr,"[guest-libc] UNHANDLED syscall n=%ld tid=%lu ra=%p (failing with ENOSYS)\n",n,GetCurrentThreadId(),__builtin_return_address(0)); fflush(stderr);} } errno = 38 /*ENOSYS*/; return -1;
   }
 }
 static int *__attribute__((sysv_abi)) _win32_errno_location(void){ return _errno(); }
@@ -361,6 +415,49 @@ static const char *_winpath(const char *p){
     if (p && p[0]=='/' && ((p[1]>='A'&&p[1]<='Z')||(p[1]>='a'&&p[1]<='z')) && p[2]==':')
         return p + 1;
     return p;
+}
+
+/* SQLite opens the database directory so it can fsync the directory after a
+ * journal/WAL update. The Windows CRT cannot open directories, so represent
+ * directory-only handles synthetically and handle them explicitly below. */
+#define DIRFD_BASE 0x30000000
+#define DIRFD_MAX  128
+static volatile LONG g_dirfd_used[DIRFD_MAX];
+static int _dirfd_alloc(void){
+    for (int i=0; i<DIRFD_MAX; ++i)
+        if (InterlockedCompareExchange(&g_dirfd_used[i], 1, 0) == 0)
+            return DIRFD_BASE + i;
+    errno = EMFILE;
+    return -1;
+}
+static int _dirfd_is(int fd){
+    return fd >= DIRFD_BASE && fd < DIRFD_BASE + DIRFD_MAX &&
+           g_dirfd_used[fd - DIRFD_BASE] != 0;
+}
+static int _dirfd_close(int fd){
+    if (!_dirfd_is(fd)){ errno = EBADF; return -1; }
+    InterlockedExchange(&g_dirfd_used[fd - DIRFD_BASE], 0);
+    return 0;
+}
+
+/* UCRT may report st_ino==0 for Windows files. SQLite combines st_dev and
+ * st_ino to identify each database's WAL shared-memory node; a common fallback
+ * inode aliases all databases to the first -shm mapping. Keep a stable inode
+ * derived from the canonical path and remember it for fstat(fd). */
+static unsigned long long _path_ino(const char *p){
+    const unsigned char *s = (const unsigned char *)(p ? p : "");
+    unsigned long long h = 1469598103934665603ULL;
+    while (*s){ h ^= (unsigned long long)*s++; h *= 1099511628211ULL; }
+    return h ? h : 1ULL;
+}
+static unsigned long long g_fd_ino[4096];
+static void _remember_fd_ino(int fd, const char *p){
+    if (fd >= 0 && fd < (int)(sizeof g_fd_ino / sizeof g_fd_ino[0]))
+        g_fd_ino[fd] = _path_ino(p);
+}
+static unsigned long long _fd_ino(int fd){
+    return (fd >= 0 && fd < (int)(sizeof g_fd_ino / sizeof g_fd_ino[0]))
+        ? g_fd_ino[fd] : 0;
 }
 /* Env-gated (ADAM_DB_DEBUG) tracing of the SQLite/file-op layer. */
 static int _dbg(void){ static int v=-1; if(v<0){ char b[8]; DWORD n=GetEnvironmentVariableA("ADAM_DB_DEBUG",b,sizeof b); v=(n>0 && n<sizeof b && b[0] && b[0]!='0')?1:0; } return v; }
@@ -388,7 +485,15 @@ static int __attribute__((sysv_abi)) _sysv_open(const char *path, int bflags, in
     if (bflags & 0200)  wf |= _O_EXCL;    /* O_EXCL   */
     if (bflags & 02000) wf |= _O_APPEND;  /* O_APPEND */
     wf |= _O_BINARY;
-    int rfd = _open(_winpath(path), wf, mode ? mode : 0666);
+    const char *wp = _winpath(path);
+    struct _stat64 pst;
+    if (_stat64(wp, &pst) == 0 && (pst.st_mode & _S_IFMT) == _S_IFDIR){
+        int dfd = _dirfd_alloc();
+        DBG("open directory(\"%s\") -> dfd=%d errno=%d\n", path, dfd, dfd < 0 ? errno : 0);
+        return dfd;
+    }
+    int rfd = _open(wp, wf, mode ? mode : 0666);
+    if (rfd >= 0) _remember_fd_ino(rfd, wp);
     DBG("open(\"%s\" bflags=0%o) -> fd=%d errno=%d\n", path, bflags, rfd, rfd<0?errno:0);
     return rfd;
 }
@@ -402,15 +507,23 @@ static int __attribute__((sysv_abi)) _sysv_open_2(const char *path, int bflags){
     return _sysv_open(path, bflags, 0);
 }
 static long __attribute__((sysv_abi)) _sysv_read(int fd, void *buf, size_t n){
+    if (_dirfd_is(fd)){ errno = EBADF; return -1; }
+    if (_net_is_fd(fd)) return _net_read(fd, buf, n);
     if (_is_ur(fd)){ if (!SystemFunction036(buf,(unsigned long)n)) return -1; return (long)n; }
     long r=_read(fd, buf, (unsigned)n); DBG("read(fd=%d n=%zu) -> %ld\n", fd, n, r); return r;
 }
-static long __attribute__((sysv_abi)) _sysv_write(int fd, const void *buf, size_t n){ return _write(fd, buf, (unsigned)n); }
+static long __attribute__((sysv_abi)) _sysv_write(int fd, const void *buf, size_t n){
+    if (_dirfd_is(fd)){ errno = EBADF; return -1; }
+    if (_net_is_fd(fd)) return _net_write(fd, buf, n);
+    return _write(fd, buf, (unsigned)n); }
 static int __attribute__((sysv_abi)) _sysv_close(int fd){
+    if (_dirfd_is(fd)) return _dirfd_close(fd);
+    if (_net_is_fd(fd)) return _net_close(fd);
     for (long i=0;i<g_urn;i++) if (g_ur[i]==fd){ g_ur[i]=g_ur[--g_urn]; break; }
     return _close(fd);
 }
 static long long __attribute__((sysv_abi)) _sysv_lseek(int fd, long long off, int whence){
+    if (_dirfd_is(fd)){ errno = ESPIPE; return -1; }
     if (_is_ur(fd)) return 0;
     long long r=_lseeki64(fd, off, whence); DBG("lseek(fd=%d off=%lld whence=%d) -> %lld\n", fd, off, whence, r); return r;
 }
@@ -432,11 +545,22 @@ static void _fill_bionic_stat(void *bst, const struct _stat64 *w){
     *(long long*)(p+104)         = (long long)w->st_ctime;
 }
 static int __attribute__((sysv_abi)) _sysv_fstat(int fd, void *bst){
-    struct _stat64 w; if (_fstat64(fd, &w) != 0) return -1; _fill_bionic_stat(bst, &w); return 0;
+    if (_dirfd_is(fd)){
+        struct _stat64 w; memset(&w, 0, sizeof w);
+        w.st_mode = _S_IFDIR | _S_IREAD | _S_IWRITE;
+        _fill_bionic_stat(bst, &w);
+        return 0;
+    }
+    struct _stat64 w; if (_fstat64(fd, &w) != 0) return -1;
+    _fill_bionic_stat(bst, &w);
+    unsigned long long ino = _fd_ino(fd);
+    if (ino) *(unsigned long long *)((unsigned char *)bst + 8) = ino;
+    return 0;
 }
 static int __attribute__((sysv_abi)) _sysv_stat(const char *path, void *bst){
     if ((uintptr_t)path < 0x10000u) return -1;
-    struct _stat64 w; int rc=_stat64(_winpath(path), &w); DBG("stat(\"%s\") -> %d errno=%d size=%lld\n", path, rc, rc?errno:0, rc?0:(long long)w.st_size); if (rc != 0) return -1; _fill_bionic_stat(bst, &w); return 0;
+    const char *wp = _winpath(path);
+    struct _stat64 w; int rc=_stat64(wp, &w); DBG("stat(\"%s\") -> %d errno=%d size=%lld\n", path, rc, rc?errno:0, rc?0:(long long)w.st_size); if (rc != 0) return -1; _fill_bionic_stat(bst, &w); *(unsigned long long *)((unsigned char *)bst + 8) = _path_ino(wp); return 0;
 }
 /* Windows has no POSIX symlinks here, so lstat == stat. SQLite's
  * unixFullPathname resolves symlinks with lstat/readlink; left unhooked these
@@ -471,46 +595,30 @@ static long __attribute__((sysv_abi)) _sysv_pwrite64(int fd, const void *buf, si
 /* fcntl: single-process, so advisory locks always succeed; F_GETLK(5) reports no
  * conflicting lock (l_type = F_UNLCK = 2 at offset 0 of struct flock). */
 static int __attribute__((sysv_abi)) _sysv_fcntl(int fd, int cmd, void *arg){
-    (void)fd;
+    if (_dirfd_is(fd)) return 0;
+    if (_net_is_fd(fd)){ int r=_net_fcntl(fd, cmd, (int)(intptr_t)arg); if (r != -2) return r; }
     DBG("fcntl(fd=%d cmd=%d)\n", fd, cmd);
     if (cmd == 5 && arg) *(short*)arg = 2;
     return 0;
 }
 static int __attribute__((sysv_abi)) _sysv_access(const char *p, int m){ if((uintptr_t)p<0x10000u) return -1; int r=_access(_winpath(p), m & 06); DBG("access(\"%s\" m=%d) -> %d errno=%d\n", p, m, r, r?errno:0); return r; }
-static int __attribute__((sysv_abi)) _sysv_fsync(int fd){ _commit(fd); return 0; }
-static int __attribute__((sysv_abi)) _sysv_ftruncate(int fd, long long len){ return _chsize_s(fd, len)==0 ? 0 : -1; }
+static int __attribute__((sysv_abi)) _sysv_fsync(int fd){
+    if (_dirfd_is(fd)){ DBG("fsync(directory fd=%d) -> 0\n", fd); return 0; }
+    errno = 0; int rc = _commit(fd);
+    DBG("fsync(fd=%d) -> %d errno=%d\n", fd, rc, rc ? errno : 0);
+    return rc;
+}
+static int __attribute__((sysv_abi)) _sysv_ftruncate(int fd, long long len){
+    if (_dirfd_is(fd)){ errno = EINVAL; return -1; }
+    errno = 0; errno_t rc = _chsize_s(fd, (__int64)len);
+    DBG("ftruncate(fd=%d len=%lld) -> %d errno=%d\n", fd, len, (int)rc, rc ? errno : 0);
+    return rc == 0 ? 0 : -1;
+}
 static char *__attribute__((sysv_abi)) _sysv_getcwd(char *buf, size_t size){ return _getcwd(buf, (int)size); }
 static int __attribute__((sysv_abi)) _sysv_mkdir(const char *p, int mode){ (void)mode; if((uintptr_t)p<0x10000u) return -1; return _mkdir(_winpath(p)); }
 static int __attribute__((sysv_abi)) _sysv_unlink(const char *p){ if((uintptr_t)p<0x10000u) return -1; return _unlink(_winpath(p)); }
 static int __attribute__((sysv_abi)) _sysv_fchmod(int fd,int m){(void)fd;(void)m;return 0;}
 static int __attribute__((sysv_abi)) _sysv_fchown(int fd,int u,int g){(void)fd;(void)u;(void)g;return 0;}
-
-/* Diagnostic: log the C++ exception type when guest code throws, then abort.
- * A guest throw can't unwind through the host (Windows PE) frames of the wrapper
- * anyway, so this reports the type instead of crashing opaquely in the unwinder. */
-static void __attribute__((sysv_abi, unused)) _log_cxa_throw(void *exc, void *tinfo, void *dtor){
-    (void)dtor;
-    const char *nm = "(null type_info)";
-    if (tinfo) { const char *n = *(const char * const *)((const char *)tinfo + 8); if (n) nm = n; }
-    fprintf(stderr, "[cxa_throw] type=%s exc=%p\n", nm, exc);
-    /* Dump the exception object's first words; interpret pointer-looking ones as
-     * strings (works for runtime_error/system_error and Apple's ErrorCondition). */
-    if (exc) {
-        const unsigned long long *w = (const unsigned long long *)exc;
-        for (int i = 0; i < 8; i++) {
-            unsigned long long v = w[i];
-            if (v >= 0x10000 && v < 0x00007fffffffffffULL){
-                const char *s = (const char *)(uintptr_t)v;
-                int printable = 1;
-                for (int k = 0; k < 24; k++){ unsigned char c = (unsigned char)s[k]; if (c==0) break; if (c<0x20||c>0x7e){ printable=0; break; } }
-                if (printable && s[0]) { fprintf(stderr, "[cxa_throw]   [%d]=%016llx -> \"%.48s\"\n", i, v, s); continue; }
-            }
-            fprintf(stderr, "[cxa_throw]   [%d]=%016llx\n", i, v);
-        }
-    }
-    fflush(stderr);
-    abort();
-}
 
 /* ── mmap family (guest -> VirtualAlloc, sysv_abi) ──────────────────────── */
 static DWORD _mprot(int prot){ if(prot==0)return PAGE_NOACCESS; if(prot&4)return (prot&2)?PAGE_EXECUTE_READWRITE:PAGE_EXECUTE_READ; if(prot&2)return PAGE_READWRITE; if(prot&1)return PAGE_READONLY; return PAGE_NOACCESS; }
@@ -577,6 +685,10 @@ struct _w32_hook { const char *name; void *fn; };
 #define HW(sym)       { #sym,  (void *)(_hybris_win32_##sym) }
 #define HA(sym, fn)   { #sym,  (void *)(fn) }
 
+/* Windows implementations (or loud failures) for libc functions that would otherwise
+ * fall through to the guest's raw-syscall libc.so; see the header for the policy. */
+#include "windows_libc_shims.h"
+
 static const struct _w32_hook win32_hooks[] = {
     /* dl* */
     HA(dlopen,_sysv_dlopen), HA(dlsym,_sysv_dlsym), HA(dlclose,_sysv_dlclose),
@@ -642,8 +754,7 @@ static const struct _w32_hook win32_hooks[] = {
     /* stdio */
     HA(printf,_v_noprint), HA(vprintf,(void*)_v_noprint),
     HA(fprintf,_v_fnoprint), HA(vfprintf,(void*)_v_fnoprint),
-    HA(sprintf,_v_fnoprint), HA(vsprintf,(void*)_v_fnoprint),
-    HA(snprintf,_sysv_snprintf), HA(vsnprintf,_sysv_vsnprintf),
+    /* sprintf/snprintf/vsprintf/vsnprintf: see win32_shim_hooks (SysV va_list aware) */
     HA(fopen,_sysv_fopen), HA(fclose,_sysv_fclose), HA(fread,_sysv_fread), HA(fwrite,_sysv_fwrite),
 
     /* process / misc */
@@ -660,12 +771,6 @@ static const struct _w32_hook win32_hooks[] = {
      * which reads an uninitialised thread pointer and returns a bogus pointer. */
     HA(__errno,_win32_errno_location),
     HA(__errno_location,_win32_errno_location),
-    /* __cxa_throw is intentionally NOT interposed: it must resolve to the guest
-     * libc++ so exceptions unwind natively through guest frames to Apple's own
-     * try/catch (lease error handling, retries). Interposing it inserted a host
-     * frame that broke DWARF unwinding, and the diagnostic variant abort()ed on
-     * every throw — turning catchable exceptions fatal. Re-add _log_cxa_throw
-     * temporarily only when tracing a specific throw. */
     /* POSIX file I/O via the host CRT; /dev/urandom from the Windows RNG. */
     HA(open,_sysv_open), HA(open64,_sysv_open), HA(openat,_sysv_openat),
     HA(__open_2,_sysv_open_2),
@@ -677,6 +782,30 @@ static const struct _w32_hook win32_hooks[] = {
     HA(fsync,_sysv_fsync), HA(fdatasync,_sysv_fsync), HA(ftruncate,_sysv_ftruncate),
     HA(getcwd,_sysv_getcwd), HA(mkdir,_sysv_mkdir), HA(unlink,_sysv_unlink),
     HA(fchmod,_sysv_fchmod), HA(fchown,_sysv_fchown),
+
+    /* Winsock shim (hybris_net.c): Apple's networking (libcurl/libssl) over
+     * Windows sockets, with bionic<->Windows translation. */
+    HA(socket,_net_socket), HA(connect,_net_connect),
+    HA(__socket,_net_socket), HA(__connect,_net_connect),
+    HA(send,_net_send), HA(recv,_net_recv),
+    HA(__send,_net_send), HA(__recv,_net_recv),
+    HA(sendto,_net_sendto), HA(recvfrom,_net_recvfrom),
+    HA(__sendto,_net_sendto), HA(__recvfrom,_net_recvfrom),
+    HA(shutdown,_net_shutdown),
+    HA(getpeername,_net_getpeername), HA(getsockname,_net_getsockname),
+    HA(setsockopt,_net_setsockopt), HA(getsockopt,_net_getsockopt),
+    HA(ioctl,_net_ioctl), HA(poll,_net_poll), HA(ppoll,_net_ppoll), HA(select,_net_select),
+    HA(__poll,_net_poll), HA(__ppoll,_net_ppoll), HA(__select,_net_select),
+    HA(epoll_create,_net_epoll_create), HA(epoll_create1,_net_epoll_create1),
+    HA(epoll_ctl,_net_epoll_ctl), HA(epoll_wait,_net_epoll_wait),
+    HA(__epoll_create,_net_epoll_create), HA(__epoll_create1,_net_epoll_create1),
+    HA(__epoll_ctl,_net_epoll_ctl), HA(__epoll_wait,_net_epoll_wait),
+    HA(eventfd,_net_eventfd), HA(eventfd_write,_net_eventfd_write),
+    HA(timerfd_create,_net_timerfd_create), HA(timerfd_settime,_net_timerfd_settime),
+    HA(getaddrinfo,_net_getaddrinfo), HA(freeaddrinfo,_net_freeaddrinfo),
+    HA(inet_pton,_net_inet_pton), HA(inet_ntop,_net_inet_ntop),
+    HA(bind,_net_bind), HA(listen,_net_listen), HA(accept,_net_accept),
+    HA(socketpair,_net_socketpair), HA(if_nametoindex,_net_if_nametoindex),
 
     /* math (FP args pass in XMM identically across ABIs — raw host OK) */
     H(sin), H(cos), H(tan), H(asin), H(acos), H(atan), H(atan2),
@@ -694,13 +823,64 @@ static const struct _w32_hook win32_hooks[] = {
     { NULL, NULL }
 };
 
+/* ── libcurl diagnostics: libmediaplatform's easy-interface calls are routed
+ * through these thin sysv_abi wrappers so the VM log shows URLs and CURLcodes. */
+static volatile long g_ctrace_n = 0;
+#define CTRACE(...) do { if (_wtrace_on() && __atomic_fetch_add(&g_ctrace_n, 1, __ATOMIC_RELAXED) < 1500) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while (0)
+static void *_curl_real(const char *name)
+{
+    static void *h;
+    if (!h) h = android_dlopen("libcurl.so", 2 /*RTLD_NOW*/);
+    return h ? android_dlsym(h, name) : NULL;
+}
+typedef long (__attribute__((sysv_abi)) *_curl_f3)(void *, long, long);
+typedef long (__attribute__((sysv_abi)) *_curl_f1)(void *);
+typedef const char *(__attribute__((sysv_abi)) *_curl_fstr)(long);
+static long __attribute__((sysv_abi)) _w_curl_easy_setopt(void *h, long opt, long arg)
+{
+    static _curl_f3 real; if (!real) real = (_curl_f3)_curl_real("curl_easy_setopt");
+    if (opt == 10002 || opt == 10004 || opt == 10065 || opt == 10097)
+        CTRACE("[curl] tid=%lu setopt h=%p opt=%ld str=%.220s\n", GetCurrentThreadId(), h, opt, arg ? (const char *)arg : "(null)");
+    else if (opt < 10000)
+        CTRACE("[curl] tid=%lu setopt h=%p opt=%ld val=%ld\n", GetCurrentThreadId(), h, opt, arg);
+    long r = real ? real(h, opt, arg) : 48;
+    if (r) CTRACE("[curl] tid=%lu setopt h=%p opt=%ld -> rc=%ld\n", GetCurrentThreadId(), h, opt, r);
+    return r;
+}
+static long __attribute__((sysv_abi)) _w_curl_easy_perform(void *h)
+{
+    static _curl_f1 real; if (!real) real = (_curl_f1)_curl_real("curl_easy_perform");
+    static _curl_fstr serr; if (!serr) serr = (_curl_fstr)_curl_real("curl_easy_strerror");
+    CTRACE("[curl] tid=%lu perform ENTER h=%p\n", GetCurrentThreadId(), h);
+    long r = real ? real(h) : 2;
+    CTRACE("[curl] tid=%lu perform EXIT h=%p rc=%ld (%s)\n", GetCurrentThreadId(), h, r, serr ? serr(r) : "?");
+    return r;
+}
+static long __attribute__((sysv_abi)) _w_curl_easy_getinfo(void *h, long info, long arg)
+{
+    static _curl_f3 real; if (!real) real = (_curl_f3)_curl_real("curl_easy_getinfo");
+    long r = real ? real(h, info, arg) : 2;
+    if (info == 0x200002 && arg) CTRACE("[curl] tid=%lu getinfo RESPONSE_CODE h=%p -> %ld\n", GetCurrentThreadId(), h, *(long *)arg);
+    return r;
+}
+
 void *hybris_get_hooked_symbol(const char *sym, const char *requester)
 {
     if (!sym) return NULL;
     for (int i = 0; win32_hooks[i].name; i++)
         if (strcmp(sym, win32_hooks[i].name) == 0)
             return win32_hooks[i].fn;
+    for (int i = 0; win32_shim_hooks[i].name; i++)
+        if (strcmp(sym, win32_shim_hooks[i].name) == 0)
+            return win32_shim_hooks[i].fn;
+    if (_wtrace_on() && requester && strstr(requester, "libmediaplatform")) {
+        if (!strcmp(sym, "curl_easy_setopt"))  return (void *)_w_curl_easy_setopt;
+        if (!strcmp(sym, "curl_easy_perform")) return (void *)_w_curl_easy_perform;
+        if (!strcmp(sym, "curl_easy_getinfo")) return (void *)_w_curl_easy_getinfo;
+    }
+    void *r = NULL;
     if (_hybris_win32_user_hook_cb)
-        return _hybris_win32_user_hook_cb(sym, requester);
-    return NULL;
+        r = _hybris_win32_user_hook_cb(sym, requester);
+    if (!r && !(sym[0]=='_' && sym[1]=='Z') && getenv("ADAM_UNHOOKED")) { fprintf(stderr, "[unhooked] %s <- %s\n", sym, requester ? requester : "?"); fflush(stderr); }
+    return r;
 }
