@@ -10,6 +10,7 @@ INC="$REPO/include"
 BIONIC_INC="$Q/bionic/libc/include"
 BIONIC_PRIV="$Q/bionic/libc"
 NS=/c/adam-src/native          # native DRM wrapper sources (and cJSON)
+LOCAL_NS=/c/libhybris-win/recovery/drm-native
 BUILD=/c/adam-build
 STUB="$BUILD/stub"
 
@@ -65,7 +66,7 @@ CORE_CFLAGS=(
 )
 NATIVE_CFLAGS=(
   -O2 -fPIC -DMyRelease -D_GNU_SOURCE -DDRM_LIB_BUILD -w
-  "-I$NS" "-I$INC" "-I$STUB"
+  "-I$LOCAL_NS" "-I$NS" "-I$INC" "-I$STUB"
 )
 
 OBJS=()
@@ -91,16 +92,24 @@ cc_native() { # $1 src
   fi
   if [[ $? -ne 0 ]]; then echo "  !! FAILED $1"; fail=1; else OBJS+=("$o"); fi
 }
+native_src() {
+  if [[ -f "$LOCAL_NS/$1" ]]; then
+    echo "$LOCAL_NS/$1"
+  else
+    echo "$NS/$1"
+  fi
+}
 
 echo "=== CORE (hybris hooks + public API) ==="
 for s in windows_core_hooks.c hooks_shm.c logging.c native_handle.c sysconf.c \
          windows_core_properties.c windows_hook_table.c dso_handle_counters.cpp; do
   cc_core "$COMMON/$s"
 done
+cc_core "$REPO/../recovery/guest_thread_bridge.cpp"
 
 echo "=== NATIVE (DRM wrapper) ==="
-for s in main.c cmdline.c hybris_stubs.c drm_lib.c cJSON.c main.cpp guard.cpp; do
-  cc_native "$NS/$s"
+for s in main.c cmdline.c hybris_stubs.c hybris_net.c drm_lib.c cJSON.c main.cpp guard.cpp; do
+  cc_native "$(native_src "$s")"
 done
 
 if [[ $fail -ne 0 ]]; then echo "BUILD ABORTED (compile errors above)"; exit 1; fi
@@ -119,4 +128,11 @@ gcc -std=gnu11 -O1 -g "-I$NS" /c/adam-src/smoke2.c "$BUILD/libdrm_client.dll" \
     -o "$BUILD/smoke2.exe"
 if [[ $? -ne 0 ]]; then echo "SMOKE2 LINK FAILED"; exit 1; fi
 ls -lh "$BUILD/smoke2.exe"
+echo "=== Building drm_lib_test.exe ==="
+gcc -std=gnu11 -O1 -g "-I$LOCAL_NS" "$LOCAL_NS/drm_lib_test.c" "$BUILD/libdrm_client.dll" \
+    -lpthread -lm -lws2_32 -ladvapi32 \
+    -Xlinker --stack -Xlinker 0x4000000,0x4000000 \
+    -o "$BUILD/drm_lib_test.exe"
+if [[ $? -ne 0 ]]; then echo "DRM API TEST LINK FAILED"; exit 1; fi
+ls -lh "$BUILD/drm_lib_test.exe"
 echo "BUILD_OK"

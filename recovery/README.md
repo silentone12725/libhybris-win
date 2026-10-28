@@ -198,3 +198,34 @@ Two ways forward:
    SysV/guest, registered with .eh_frame) so exceptions are caught in guest context
    instead of unwinding into host frames.
 Option 1 is cheaper to try first (log the exception, see if it's an avoidable error).
+
+## DRM init working on Windows VM (2026-10-27)
+
+The remaining initialization failures were fixed:
+
+- SQLite now gets synthetic directory handles and stable per-path inode IDs, so
+  each database uses its own WAL shared-memory mapping.
+- Lease callback `std::function` vtables and callback exports are marked
+  `sysv_abi`; the lease constructor and request path no longer crash in the
+  host ABI bridge.
+- `StoreErrorCondition::errorCode()` now dereferences the returned `ErrorCode`
+  object instead of truncating its pointer to an integer.
+- The native Windows socket/event compatibility layer and guest thread bridge
+  are preserved in `recovery/drm-native/` and selected automatically by
+  `recovery/build_drm.sh`.
+- If Apple's developer-token endpoint is unavailable but the copied session has
+  `MUSIC_TOKEN`, library initialization uses that cached provisioned session.
+
+VM verification: `BUILD_OK`, `INIT_OK`, `ACCOUNT_OK`, and `SHUTDOWN_OK` from
+`smoke2.exe` on the normal lease path. The returned account JSON identifies the
+developer token as `cached`, so online developer-token refresh remains a
+separate limitation.
+
+## API unit test
+
+`recovery/drm-native/drm_lib_test.c` covers every exported `drm_lib_*` function:
+initialization/account/state, login guards, media/key/decrypt invalid-input
+guards, recovery status, debug mode, and shutdown. The reproducible VM build
+creates `C:\adam-build\drm_lib_test.exe`; a passing run prints
+`DRM_API_TEST_PASS`. Valid media/decryption cases remain integration tests and
+need a licensed asset ID and content-key URI.

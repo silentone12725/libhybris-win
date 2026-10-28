@@ -57,9 +57,15 @@ static __attribute__((sysv_abi)) int _hybris_win32_pthread_once(pthread_once_t *
 
 /* ── pthread key ─────────────────────────────────────────────────────────────*/
 static __attribute__((sysv_abi)) int _hybris_win32_pthread_key_create(pthread_key_t *key,
-                                             void (*destructor)(void *))
+                                              void (*destructor)(void *))
 {
-    return pthread_key_create(key, destructor);
+    /* The guest destructor is a SysV-ABI function pointer.  winpthread calls
+     * TLS destructors using the host Microsoft x64 callback ABI, which passes
+     * the value in RCX instead of RDI and corrupts the guest callback's first
+     * argument.  Keep the key usable but do not register an ABI-incompatible
+     * host callback; cleanup is deferred until a callback bridge is available. */
+    (void)destructor;
+    return pthread_key_create(key, NULL);
 }
 
 static __attribute__((sysv_abi)) int _hybris_win32_pthread_key_delete(pthread_key_t key)

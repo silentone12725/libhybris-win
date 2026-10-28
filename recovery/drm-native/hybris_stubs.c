@@ -199,22 +199,22 @@ void _resolv_set_nameservers_for_net(unsigned netid, const char **servers,
  * ──────────────────────────────────────────────────────────────────────────── */
 
 /* callbacks exported from main.cpp */
-extern void endLeaseCbExport(const int *code_ptr);
-extern void pbErrCbExport(void *arg);
+extern void __attribute__((sysv_abi)) endLeaseCbExport(const int *code_ptr);
+extern void __attribute__((sysv_abi)) pbErrCbExport(void *arg);
 
 /* ── endLeaseCallback: std::function<void(const int&)> ─────────────────────*/
 
-static void vf_el_destroy(void *self) { (void)self; }
-static void vf_el_destroy_and_delete(void *self) { free(self); }
-static void *vf_el_clone_heap(void *self) {
+static void __attribute__((sysv_abi)) vf_el_destroy(void *self) { (void)self; }
+static void __attribute__((sysv_abi)) vf_el_destroy_and_delete(void *self) { free(self); }
+static void *__attribute__((sysv_abi)) vf_el_clone_heap(void *self) {
     void *copy = malloc(3 * sizeof(void *));
     memcpy(copy, self, 3 * sizeof(void *));
     return copy;
 }
-static void vf_el_clone_sbo(void *self, void *dst) {
+static void __attribute__((sysv_abi)) vf_el_clone_sbo(void *self, void *dst) {
     memcpy(dst, self, 3 * sizeof(void *));
 }
-static void vf_el_invoke(void *self, const int *code) {
+static void __attribute__((sysv_abi)) vf_el_invoke(void *self, const int *code) {
     void (__attribute__((sysv_abi)) *fn)(const int *) = (void (__attribute__((sysv_abi)) *)(const int *))((void **)self)[1];
     fn(code);
 }
@@ -236,17 +236,17 @@ uint8_t endLeaseCallback[32];
 
 /* ── pbErrCallback: std::function<void(const shared_ptr<StoreErrorCond>&)> ─*/
 
-static void vf_pe_destroy(void *self) { (void)self; }
-static void vf_pe_destroy_and_delete(void *self) { free(self); }
-static void *vf_pe_clone_heap(void *self) {
+static void __attribute__((sysv_abi)) vf_pe_destroy(void *self) { (void)self; }
+static void __attribute__((sysv_abi)) vf_pe_destroy_and_delete(void *self) { free(self); }
+static void *__attribute__((sysv_abi)) vf_pe_clone_heap(void *self) {
     void *copy = malloc(3 * sizeof(void *));
     memcpy(copy, self, 3 * sizeof(void *));
     return copy;
 }
-static void vf_pe_clone_sbo(void *self, void *dst) {
+static void __attribute__((sysv_abi)) vf_pe_clone_sbo(void *self, void *dst) {
     memcpy(dst, self, 3 * sizeof(void *));
 }
-static void vf_pe_invoke(void *self, void *arg) {
+static void __attribute__((sysv_abi)) vf_pe_invoke(void *self, void *arg) {
     void (__attribute__((sysv_abi)) *fn)(void *) = (void (__attribute__((sysv_abi)) *)(void *))((void **)self)[1];
     fn(arg);
 }
@@ -796,9 +796,14 @@ union std_string *_ZNK17storeservicescore13PurchaseAsset11downloadKeyEv(void *ob
     return fn(obj,out);
 }
 int _ZNK17storeservicescore19StoreErrorCondition9errorCodeEv(void *obj) {
-    static int (__attribute__((sysv_abi)) *fn)(void*) = NULL;
+    /* The C++ method returns a reference/pointer to ErrorCode (the method
+     * body returns `this + 0x20`), not the integer itself. Returning the raw
+     * pointer through an int truncated the guest address and produced values
+     * such as -906828568 in diagnostics. */
+    static int *(__attribute__((sysv_abi)) *fn)(void*) = NULL;
     if (!fn) fn = sym("_ZNK17storeservicescore19StoreErrorCondition9errorCodeEv");
-    return fn(obj);
+    int *code = fn(obj);
+    return code ? *code : -1;
 }
 const char *_ZNK17storeservicescore19StoreErrorCondition4whatEv(void *obj) {
     static const char *(__attribute__((sysv_abi)) *fn)(void*) = NULL;

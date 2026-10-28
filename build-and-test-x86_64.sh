@@ -115,7 +115,7 @@ else
     # MinGW-w64 uses LLP64 and does not define __LP64__, but this target still
     # consumes Android's 64-bit ABI headers and must use their 64-bit branch.
     CFLAGS_COMMON+=(-D__LP64__)
-    LINK_LIBS=(-lsupc++)
+    LINK_LIBS=(-lsupc++ -lws2_32)
 fi
 
 if [[ -z "$HYBRIS_LINKER_DIR" ]]; then
@@ -289,6 +289,15 @@ for src in "${COMMON_SRCS[@]}"; do
         COMMON_OBJS+=( "$(compile_src "$src")" )
     fi
 done
+
+# The Windows hook table delegates guest networking and guest-thread entry to
+# the same compatibility implementations used by the DRM client.  Keep these
+# objects in the standalone core DLL too; otherwise the core links only when it
+# is embedded in the client (where the DRM objects happen to provide them).
+if [[ "$TARGET_TRIPLE" == *mingw* || "$TARGET_TRIPLE" == *msys* ]]; then
+    COMMON_OBJS+=( "$(compile_src "$ROOT/recovery/drm-native/hybris_net.c")" )
+    COMMON_OBJS+=( "$(compile_src "$ROOT/recovery/guest_thread_bridge.cpp")" )
+fi
 
 echo ""
 echo "=== Linking libhybris-core.so ==="
