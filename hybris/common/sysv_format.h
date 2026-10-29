@@ -18,6 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef __builtin_sysv_va_list sh_va;
@@ -168,6 +169,10 @@ static int sh_vformat(char *out, size_t cap, const char *fmt, sh_va ap)
         }
         case 'e': case 'E': case 'f': case 'F': case 'g': case 'G': case 'a': case 'A': {
             double d = (lm == 5) ? (double)__builtin_va_arg(ap, long double) : __builtin_va_arg(ap, double);
+#ifdef SH_FMT_TRACE
+            { static int on = -1; if (on < 0) on = getenv("ADAM_FMT_TRACE") != NULL;
+              if (on) { union { double d; unsigned long long u; } cv = { d }; fprintf(stderr, "[fmt] %%%c arg=%g bits=%016llx fmt=%.60s\n", conv, d, cv.u, fmt); fflush(stderr); } }
+#endif
             snprintf(spec, sizeof spec, "%%%s%s%s%c", flags, width >= 0 ? "*" : "", prec >= 0 ? ".*" : "", conv);
             int r;
             if (width >= 0 && prec >= 0) r = snprintf(tmp, sizeof tmp, spec, (int)width, (int)prec, d);

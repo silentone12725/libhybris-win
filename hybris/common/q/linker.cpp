@@ -477,6 +477,15 @@ _Unwind_Ptr do_dl_unwind_find_exidx(_Unwind_Ptr pc, int* pcount) {
 
 // Here, we only have to provide a callback to iterate across all the
 // loaded libraries. gcc_eh does the rest.
+// The callback is guest code (the C++ unwinder's FDE lookup), so on a Windows build it takes its arguments in
+// the System V registers (rdi, rsi, rdx). A plain function-pointer call here would use the Microsoft ones
+// (rcx, rdx, r8) and the unwinder would read `data` from the wrong register.
+#if defined(_WIN32) && defined(__x86_64__)
+typedef int (__attribute__((sysv_abi)) *guest_phdr_cb_t)(dl_phdr_info* info, size_t size, void* data);
+#else
+typedef int (*guest_phdr_cb_t)(dl_phdr_info* info, size_t size, void* data);
+#endif
+
 int do_dl_iterate_phdr(int (*cb)(dl_phdr_info* info, size_t size, void* data), void* data) {
   int rv = 0;
   for (soinfo* si = solist_get_head(); si != nullptr; si = si->next) {
@@ -485,7 +494,7 @@ int do_dl_iterate_phdr(int (*cb)(dl_phdr_info* info, size_t size, void* data), v
     dl_info.dlpi_name = si->link_map_head.l_name;
     dl_info.dlpi_phdr = si->phdr;
     dl_info.dlpi_phnum = si->phnum;
-    rv = cb(&dl_info, sizeof(dl_phdr_info), data);
+    rv = reinterpret_cast<guest_phdr_cb_t>(cb)(&dl_info, sizeof(dl_phdr_info), data);
     if (rv != 0) {
       break;
     }

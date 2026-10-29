@@ -238,6 +238,10 @@ static int SYSV _sh_sigaction(int sig, const void *act, void *old)
     if (old) memset(old, 0, 32);                 /* bionic LP64 struct sigaction */
     return 0;
 }
+/* signal(2): libcurl installs SIG_IGN for SIGPIPE. bionic's signal() ends in a raw rt_sigaction syscall, which on
+ * Windows is an NT syscall with the wrong number. Handlers are never delivered here, so report the previous one as SIG_DFL. */
+static int64_t SYSV _sh_signal(int sig, int64_t handler)
+{ (void)handler; if (sig <= 0 || sig > 64) { errno = LE_INVAL; return -1; } SH_ONCE("signal", "handlers are accepted but never delivered on Windows"); return 0; }
 static int SYSV _sh_sigprocmask(int how, const void *set, void *old) { (void)how; (void)set; if (old) *(uint64_t *)old = 0; return 0; }
 static int SYSV _sh_sigaltstack(const void *ss, void *old)
 { (void)ss; if (old) { memset(old, 0, 24); *(int *)((char *)old + 8) = 2 /* SS_DISABLE */; } return 0; }
@@ -466,7 +470,7 @@ static const struct _w32_hook win32_shim_hooks[] = {
     HA(setpgid,_shu_setpgid), HA(setsid,_shu_setsid), HA(setgroups,_shu_setgroups),
     HA(setresuid,_shu_setresuid), HA(setresgid,_shu_setresgid),
     /* signals and processes */
-    HA(sigaction,_sh_sigaction), HA(sigprocmask,_sh_sigprocmask), HA(sigaltstack,_sh_sigaltstack),
+    HA(sigaction,_sh_sigaction), HA(signal,_sh_signal), HA(bsd_signal,_sh_signal), HA(sysv_signal,_sh_signal), HA(sigprocmask,_sh_sigprocmask), HA(sigaltstack,_sh_sigaltstack),
     HA(setitimer,_sh_setitimer), HA(kill,_sh_kill), HA(tgkill,_sh_tgkill),
     HA(sigsuspend,_shu_sigsuspend), HA(signalfd,_shu_signalfd),
     HA(fork,_shu_fork), HA(vfork,_shu_vfork), HA(clone,_shu_clone), HA(execve,_shu_execve),

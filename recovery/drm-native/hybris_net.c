@@ -27,6 +27,14 @@
 
 #define SV __attribute__((sysv_abi))
 
+/* Per-call tracing is off unless the DRM debug flag is set (it ran on every poll). */
+static int net_log_on(void) {
+  static volatile LONG v = -1;
+  if (v < 0) v = getenv("ADAM_DRM_DEBUG") != NULL;
+  return (int)v;
+}
+#define NETLOG(...) do { if (net_log_on()) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while (0)
+
 /* ── bionic errno values (the guest compares against these) ───────────────── */
 #define B_EINTR 4
 #define B_EBADF 9
@@ -52,6 +60,7 @@
 
 static int wsa2errno(int w) {
   switch (w) {
+    case 0: return 0;   /* SO_ERROR after a successful connect: no error */
     case WSAEINTR: return B_EINTR;
     case WSAEBADF: return B_EBADF;
     case WSAEWOULDBLOCK: return B_EAGAIN;
@@ -110,7 +119,11 @@ static int sox_alloc(SOCKET s) {
 static SOCKET sox_get(int fd) {
   if (fd < NETFD_BASE || fd >= NETFD_BASE + NETFD_MAX) return INVALID_SOCKET;
   int i = fd - NETFD_BASE;
-  return g_sox[i].used ? g_sox[i].s : INVALID_SOCKET;
+  net_ready();
+  EnterCriticalSection(&g_sox_cs);   /* a concurrent close/alloc rewrites the slot */
+  SOCKET r = g_sox[i].used ? g_sox[i].s : INVALID_SOCKET;
+  LeaveCriticalSection(&g_sox_cs);
+  return r;
 }
 
 #define AUXFD_BASE 0x50000000
@@ -176,41 +189,41 @@ int SV _net_socket(int domain, int type, int protocol) {
   int nb = (type & 04000) ? 1 : 0;
   int wtype = type & ~(02000000 | 04000);
   SOCKET s = socket(af_b2w(domain), wtype, protocol);
-  if (s == INVALID_SOCKET) { set_wsa_errno(); fprintf(stderr, "[net] socket failed errno=%d\n", errno); return -1; }
+  if (s == INVALID_SOCKET) { set_wsa_errno(); NETLOG("[net] socket failed errno=%d\n", errno); return -1; }
   int fd = sox_alloc(s);
   if (fd < 0) { closesocket(s); errno = B_EINVAL; return -1; }
   if (nb) { unsigned int on = 1; ioctlsocket(s, FIONBIO, &on); g_sox[fd - NETFD_BASE].nonblock = 1; }
-  fprintf(stderr, "[net] socket domain=%d type=%d -> fd=%d\n", domain, type, fd);
+  NETLOG("[net] socket domain=%d type=%d -> fd=%d\n", domain, type, fd);
   return fd;
 }
 int SV _net_connect(int fd, const void *addr, int alen) {
-  fprintf(stderr, "[net] connect enter fd=%d alen=%d\n", fd, alen);
+  NETLOG("[net] connect enter fd=%d alen=%d\n", fd, alen);
   SOCKET s = sox_get(fd);
   if (s == INVALID_SOCKET) { errno = B_EBADF; return -1; }
   struct sockaddr_storage ss; int wlen;
   sa_b2w(addr, alen, &ss, &wlen);
-  if (connect(s, (struct sockaddr *)&ss, wlen) == 0) { fprintf(stderr, "[net] connect fd=%d ok\n", fd); return 0; }
-  set_wsa_errno(); fprintf(stderr, "[net] connect fd=%d failed errno=%d wsa=%d\n", fd, errno, WSAGetLastError());
+  if (connect(s, (struct sockaddr *)&ss, wlen) == 0) { NETLOG("[net] connect fd=%d ok\n", fd); return 0; }
+  set_wsa_errno(); NETLOG("[net] connect fd=%d failed errno=%d wsa=%d\n", fd, errno, WSAGetLastError());
   return -1;
 }
 long SV _net_send(int fd, const void *buf, size_t n, int flags) {
   SOCKET s = sox_get(fd);
   if (s == INVALID_SOCKET) { errno = B_EBADF; return -1; }
   int r = send(s, (const char *)buf, (int)n, flags & ~0x4000 /* strip MSG_NOSIGNAL */);
-  if (r == SOCKET_ERROR) { set_wsa_errno(); fprintf(stderr, "[net] send fd=%d n=%zu failed errno=%d\n", fd, n, errno); return -1; }
-  fprintf(stderr, "[net] send fd=%d n=%zu -> %d\n", fd, n, r);
+  if (r == SOCKET_ERROR) { set_wsa_errno(); NETLOG("[net] send fd=%d n=%zu failed errno=%d\n", fd, n, errno); return -1; }
+  NETLOG("[net] send fd=%d n=%zu -> %d\n", fd, n, r);
   return r;
 }
 long SV _net_recv(int fd, void *buf, size_t n, int flags) {
   SOCKET s = sox_get(fd);
   if (s == INVALID_SOCKET) { errno = B_EBADF; return -1; }
   int r = recv(s, (char *)buf, (int)n, flags);
-  if (r == SOCKET_ERROR) { set_wsa_errno(); fprintf(stderr, "[net] recv fd=%d n=%zu failed errno=%d\n", fd, n, errno); return -1; }
-  fprintf(stderr, "[net] recv fd=%d n=%zu -> %d\n", fd, n, r);
+  if (r == SOCKET_ERROR) { set_wsa_errno(); NETLOG("[net] recv fd=%d n=%zu failed errno=%d\n", fd, n, errno); return -1; }
+  NETLOG("[net] recv fd=%d n=%zu -> %d\n", fd, n, r);
   return r;
 }
 long SV _net_sendto(int fd, const void *buf, size_t n, int flags, const void *addr, int alen) {
-  fprintf(stderr, "[net] sendto enter fd=%d n=%zu alen=%d\n", fd, n, alen);
+  NETLOG("[net] sendto enter fd=%d n=%zu alen=%d\n", fd, n, alen);
   SOCKET s = sox_get(fd);
   if (s == INVALID_SOCKET) { errno = B_EBADF; return -1; }
   int r;
@@ -220,18 +233,18 @@ long SV _net_sendto(int fd, const void *buf, size_t n, int flags, const void *ad
   } else {
     r = send(s, (const char *)buf, (int)n, flags & ~0x4000);
   }
-  if (r == SOCKET_ERROR) { set_wsa_errno(); fprintf(stderr, "[net] sendto fd=%d failed errno=%d wsa=%d\n", fd, errno, WSAGetLastError()); return -1; }
-  fprintf(stderr, "[net] sendto fd=%d -> %d\n", fd, r);
+  if (r == SOCKET_ERROR) { set_wsa_errno(); NETLOG("[net] sendto fd=%d failed errno=%d wsa=%d\n", fd, errno, WSAGetLastError()); return -1; }
+  NETLOG("[net] sendto fd=%d -> %d\n", fd, r);
   return r;
 }
 long SV _net_recvfrom(int fd, void *buf, size_t n, int flags, void *addr, int *alen) {
-  fprintf(stderr, "[net] recvfrom enter fd=%d n=%zu\n", fd, n);
+  NETLOG("[net] recvfrom enter fd=%d n=%zu\n", fd, n);
   SOCKET s = sox_get(fd);
   if (s == INVALID_SOCKET) { errno = B_EBADF; return -1; }
   int wlen = (addr && alen) ? *alen : 0;
   int r = recvfrom(s, (char *)buf, (int)n, flags, (struct sockaddr *)addr, addr ? &wlen : NULL);
-  if (r == SOCKET_ERROR) { set_wsa_errno(); fprintf(stderr, "[net] recvfrom fd=%d failed errno=%d wsa=%d\n", fd, errno, WSAGetLastError()); return -1; }
-  fprintf(stderr, "[net] recvfrom fd=%d -> %d\n", fd, r);
+  if (r == SOCKET_ERROR) { set_wsa_errno(); NETLOG("[net] recvfrom fd=%d failed errno=%d wsa=%d\n", fd, errno, WSAGetLastError()); return -1; }
+  NETLOG("[net] recvfrom fd=%d -> %d\n", fd, r);
   if (addr && alen) { sa_w2b(addr, &wlen); *alen = wlen; }
   return r;
 }
@@ -295,7 +308,7 @@ int SV _net_setsockopt(int fd, int level, int optname, const void *val, int len)
   return 0;
 }
 int SV _net_getsockopt(int fd, int level, int optname, void *val, int *len) {
-  fprintf(stderr, "[net] getsockopt fd=%d level=%d opt=%d\n", fd, level, optname);
+  NETLOG("[net] getsockopt fd=%d level=%d opt=%d\n", fd, level, optname);
   SOCKET s = sox_get(fd);
   if (s == INVALID_SOCKET) { errno = B_EBADF; return -1; }
   int wl, wo;
@@ -311,7 +324,7 @@ int SV _net_getsockopt(int fd, int level, int optname, void *val, int *len) {
 
 /* ── ioctl / fcntl (non-blocking) ─────────────────────────────────────────── */
 int SV _net_ioctl(int fd, unsigned long req, void *arg) {
-  fprintf(stderr, "[net] ioctl fd=%d req=%lu\n", fd, req);
+  NETLOG("[net] ioctl fd=%d req=%lu\n", fd, req);
   if (!_net_is_fd(fd)) return 0; /* non-socket ioctl: ignore */
   SOCKET s = sox_get(fd);
   if (s == INVALID_SOCKET) { errno = B_EBADF; return -1; }
@@ -331,7 +344,7 @@ int SV _net_ioctl(int fd, unsigned long req, void *arg) {
 /* F_GETFL=3, F_SETFL=4; bionic O_NONBLOCK=0x800. Returns fcntl result, or -2 if
  * the command is not one we handle (caller falls back to its default). */
 int SV _net_fcntl(int fd, int cmd, int arg) {
-  fprintf(stderr, "[net] fcntl fd=%d cmd=%d arg=%d\n", fd, cmd, arg);
+  NETLOG("[net] fcntl fd=%d cmd=%d arg=%d\n", fd, cmd, arg);
   if (aux_get(fd)) return 0;
   if (!_net_is_fd(fd)) return -2;
   int i = fd - NETFD_BASE;
@@ -346,7 +359,7 @@ int SV _net_fcntl(int fd, int cmd, int arg) {
   return 0;
 }
 long SV _net_read(int fd, void *buf, size_t n) {
-  struct aux_fd *a=aux_get(fd); if(a && a->kind==AUX_EVENTFD){ if(n<8){errno=B_EINVAL;return -1;} if(a->counter==0){errno=B_EAGAIN;return -1;} *(uint64_t*)buf=a->counter;a->counter=0;return 8; }
+  struct aux_fd *a=aux_get(fd); if(a && a->kind==AUX_EVENTFD){ if(n<8){errno=B_EINVAL;return -1;} EnterCriticalSection(&g_sox_cs); uint64_t c=a->counter; a->counter=0; LeaveCriticalSection(&g_sox_cs); if(c==0){errno=B_EAGAIN;return -1;} *(uint64_t*)buf=c;return 8; }
   if(a && a->kind==AUX_TIMERFD){ if(n<8){errno=B_EINVAL;return -1;} if(!a->due_ms||now_ms()<a->due_ms){errno=B_EAGAIN;return -1;} *(uint64_t*)buf=1;a->due_ms=a->interval_ms?now_ms()+a->interval_ms:0;return 8; }
   return _net_recv(fd, buf, n, 0);
 }
@@ -371,9 +384,9 @@ struct b_pollfd { int fd; short events; short revents; };
 #define B_POLLHUP 0x0010
 #define B_POLLNVAL 0x0020
 int SV _net_poll(void *fds_, unsigned long nfds, int timeout) {
-  fprintf(stderr, "[net] poll nfds=%lu timeout=%d\n", nfds, timeout);
+  NETLOG("[net] poll nfds=%lu timeout=%d\n", nfds, timeout);
   struct b_pollfd *fds = (struct b_pollfd *)fds_;
-  if (nfds == 0) { Sleep(timeout > 0 ? timeout : 0); return 0; }
+  if (nfds == 0) { Sleep(timeout < 0 ? INFINITE : (DWORD)timeout); return 0; }
   WSAPOLLFD *wf = (WSAPOLLFD *)calloc(nfds, sizeof(WSAPOLLFD));
   if (!wf) { errno = B_EINVAL; return -1; }
   for (unsigned long i = 0; i < nfds; i++) {
@@ -407,8 +420,8 @@ struct b_addrinfo {
   int ai_protocol;    /* 12 */
   uint32_t ai_addrlen;/* 16 */
   /* 4 bytes pad      (20) */
-  void *ai_addr;      /* 24 (struct sockaddr*) */
-  char *ai_canonname; /* 32 */
+  char *ai_canonname; /* 24  bionic (BSD) order: canonname first, then addr (glibc has them the other way round) */
+  void *ai_addr;      /* 32 (struct sockaddr*) */
   void *ai_next;      /* 40 */
 };                    /* 48 */
 
@@ -426,8 +439,10 @@ int SV _net_getaddrinfo(const char *node, const char *service, const void *hints
   }
   struct addrinfo *wres = NULL;
   int rc = getaddrinfo(node, service, whintsp, &wres);
-  fprintf(stderr, "[net] getaddrinfo node=%s service=%s -> %d\n", node?node:"", service?service:"", rc);
+  NETLOG("[net] getaddrinfo node=%s service=%s hints(flags=%d fam=%d type=%d) -> %d (wsa %d)\n", node?node:"", service?service:"",
+         bh ? bh->ai_flags : -1, bh ? bh->ai_family : -1, bh ? bh->ai_socktype : -1, rc, rc ? WSAGetLastError() : 0);
   if (rc != 0) { return rc; /* EAI_* codes are largely common */ }
+  for (struct addrinfo *w = wres; w; w = w->ai_next) NETLOG("[net]   result family=%d type=%d len=%d\n", w->ai_family, w->ai_socktype, (int)w->ai_addrlen);
   /* Translate the Windows list into a bionic-layout list. */
   struct b_addrinfo *head = NULL, *tail = NULL;
   for (struct addrinfo *w = wres; w; w = w->ai_next) {
@@ -520,7 +535,7 @@ static int fdset_has(const unsigned char *set, int fd){ return set && fd>=0 && f
 static void fdset_put(unsigned char *set, int fd){ if(set&&fd>=0&&fd<1024)set[fd>>3]|=(unsigned char)(1u<<(fd&7)); }
 static void fdset_zero(unsigned char *set){ if(set) memset(set,0,128); }
 int SV _net_select(int nfds, void *rset_, void *wset_, void *xset_, const void *tv_){
-  fprintf(stderr, "[net] select nfds=%d\n", nfds);
+  NETLOG("[net] select nfds=%d\n", nfds);
   unsigned char *rset=(unsigned char*)rset_, *wset=(unsigned char*)wset_, *xset=(unsigned char*)xset_;
   struct b_timeval tv; int timeout=-1;
   if(tv_){ memcpy(&tv,tv_,sizeof tv); timeout=(int)(tv.tv_sec*1000+tv.tv_usec/1000); if(timeout<0)timeout=0; }
@@ -548,10 +563,10 @@ static int aux_alloc(int kind) {
   }
   LeaveCriticalSection(&g_sox_cs); errno=B_EINVAL; return -1;
 }
-int SV _net_epoll_create(int size) { (void)size; int r=aux_alloc(AUX_EPOLL); fprintf(stderr,"[net] epoll_create -> %d\n",r); return r; }
-int SV _net_epoll_create1(int flags) { (void)flags; int r=aux_alloc(AUX_EPOLL); fprintf(stderr,"[net] epoll_create1 -> %d\n",r); return r; }
+int SV _net_epoll_create(int size) { (void)size; int r=aux_alloc(AUX_EPOLL); NETLOG("[net] epoll_create -> %d\n",r); return r; }
+int SV _net_epoll_create1(int flags) { (void)flags; int r=aux_alloc(AUX_EPOLL); NETLOG("[net] epoll_create1 -> %d\n",r); return r; }
 int SV _net_epoll_ctl(int epfd, int op, int fd, const void *event_) {
-  fprintf(stderr,"[net] epoll_ctl epfd=%d op=%d fd=%d\n",epfd,op,fd);
+  NETLOG("[net] epoll_ctl epfd=%d op=%d fd=%d\n",epfd,op,fd);
   struct aux_fd *a=aux_get(epfd); if(!a || a->kind!=AUX_EPOLL){errno=B_EBADF;return -1;}
   const struct b_epoll_event *ev=(const struct b_epoll_event *)event_;
   EnterCriticalSection(&g_sox_cs);
@@ -565,28 +580,46 @@ int SV _net_epoll_ctl(int epfd, int op, int fd, const void *event_) {
 }
 static short ep_events_to_poll(uint32_t e){ short p=0; if(e&EPOLLIN)p|=POLLRDNORM; if(e&EPOLLOUT)p|=POLLWRNORM; return p; }
 static uint32_t poll_to_ep_events(short e){ uint32_t r=0; if(e&(POLLRDNORM|POLLRDBAND))r|=EPOLLIN; if(e&POLLWRNORM)r|=EPOLLOUT; if(e&POLLERR)r|=EPOLLERR; if(e&POLLHUP)r|=EPOLLHUP; if(e&POLLNVAL)r|=EPOLLERR; return r; }
+/* Readiness of the emulated (non-socket) descriptors is polled, not signalled: WSAPoll cannot be woken by an
+ * eventfd write. So when an epoll set holds an eventfd/timerfd the wait runs in short slices and re-checks
+ * them each time, which bounds the wake-up latency instead of sleeping out the whole timeout. */
+#define EP_SLICE_MS 10
 int SV _net_epoll_wait(int epfd, void *events_, int maxevents, int timeout) {
-  fprintf(stderr,"[net] epoll_wait epfd=%d max=%d timeout=%d\n",epfd,maxevents,timeout);
+  NETLOG("[net] epoll_wait epfd=%d max=%d timeout=%d\n",epfd,maxevents,timeout);
   struct aux_fd *a=aux_get(epfd); if(!a||a->kind!=AUX_EPOLL||!events_||maxevents<=0){errno=B_EINVAL;return -1;}
   struct b_epoll_event *out=(struct b_epoll_event*)events_;
-  WSAPOLLFD wf[AUXEP_MAX]; int wi[AUXEP_MAX]; int wn=0; uint64_t now=now_ms();
-  EnterCriticalSection(&g_sox_cs);
-  for(int i=0;i<AUXEP_MAX;i++) if(a->items[i].used){
-    struct aux_fd *child=aux_get(a->items[i].fd);
-    if(child && child->kind==AUX_EVENTFD && child->counter>0){ if(wn<maxevents){out[wn].events=EPOLLIN;out[wn].pad=0;out[wn].data=a->items[i].data;wn++;} continue; }
-    if(child && child->kind==AUX_TIMERFD && child->due_ms && now>=child->due_ms){ if(wn<maxevents){out[wn].events=EPOLLIN;out[wn].pad=0;out[wn].data=a->items[i].data;wn++;} continue; }
-    SOCKET s=sox_get(a->items[i].fd); if(s!=INVALID_SOCKET && wn<maxevents){ wf[wn].fd=s;wf[wn].events=ep_events_to_poll(a->items[i].events);wf[wn].revents=0;wi[wn]=i;wn++; }
+  uint64_t start=now_ms();
+  for(;;){
+    WSAPOLLFD wf[AUXEP_MAX]; int wi[AUXEP_MAX]; int wn=0, outn=0, emulated=0; uint64_t now=now_ms();
+    EnterCriticalSection(&g_sox_cs);
+    for(int i=0;i<AUXEP_MAX;i++) if(a->items[i].used){
+      struct aux_fd *child=aux_get(a->items[i].fd);
+      if(child && (child->kind==AUX_EVENTFD || child->kind==AUX_TIMERFD)){
+        emulated=1;
+        int ready = child->kind==AUX_EVENTFD ? child->counter>0 : (child->due_ms && now>=child->due_ms);
+        if(ready && outn<maxevents){ out[outn].events=EPOLLIN; out[outn].pad=0; out[outn].data=a->items[i].data; outn++; }
+        continue;
+      }
+      SOCKET s=sox_get(a->items[i].fd);
+      if(s!=INVALID_SOCKET){ wf[wn].fd=s; wf[wn].events=ep_events_to_poll(a->items[i].events); wf[wn].revents=0; wi[wn]=i; wn++; }
+    }
+    LeaveCriticalSection(&g_sox_cs);
+    uint64_t elapsed=now_ms()-start;
+    int left = timeout<0 ? -1 : (elapsed>=(uint64_t)timeout ? 0 : (int)((uint64_t)timeout-elapsed));
+    int ms = outn>0 ? 0 : left;
+    if(emulated && ms!=0 && (ms<0 || ms>EP_SLICE_MS)) ms=EP_SLICE_MS;
+    if(wn>0){
+      int r=WSAPoll(wf,(ULONG)wn,ms); if(r==SOCKET_ERROR){set_wsa_errno();return -1;}
+      for(int j=0;j<wn && outn<maxevents;j++) if(wf[j].revents){ int i=wi[j]; out[outn].events=poll_to_ep_events(wf[j].revents); out[outn].pad=0; out[outn].data=a->items[i].data; outn++; }
+    } else if(ms!=0) Sleep(ms<0 ? EP_SLICE_MS : (DWORD)ms);
+    if(outn>0) return outn;
+    if(timeout>=0 && now_ms()-start>=(uint64_t)timeout) return 0;
+    if(!emulated && wn>0 && ms<0) continue;   /* infinite wait that WSAPoll cut short: go round again */
+    if(!emulated && wn>0) return 0;           /* socket-only set: WSAPoll already honoured the whole timeout */
   }
-  LeaveCriticalSection(&g_sox_cs);
-  int r=0;
-  if(wn>0){ r=WSAPoll(wf,(ULONG)wn,timeout); if(r==SOCKET_ERROR){set_wsa_errno();return -1;} }
-  else if(timeout!=0) Sleep(timeout>0?(DWORD)timeout:0);
-  if(r<=0) return 0;
-  int outn=0; for(int j=0;j<wn && outn<maxevents;j++) if(wf[j].revents){ int i=wi[j]; out[outn].events=poll_to_ep_events(wf[j].revents);out[outn].pad=0;out[outn].data=a->items[i].data;outn++; }
-  return outn;
 }
-int SV _net_eventfd(unsigned int initval, int flags){ (void)flags; int fd=aux_alloc(AUX_EVENTFD); fprintf(stderr,"[net] eventfd init=%u -> %d\n",initval,fd); struct aux_fd*a=aux_get(fd); if(a)a->counter=initval; return fd; }
+int SV _net_eventfd(unsigned int initval, int flags){ (void)flags; int fd=aux_alloc(AUX_EVENTFD); NETLOG("[net] eventfd init=%u -> %d\n",initval,fd); struct aux_fd*a=aux_get(fd); if(a)a->counter=initval; return fd; }
 int SV _net_eventfd_write(int fd, uint64_t value){ struct aux_fd*a=aux_get(fd); if(!a||a->kind!=AUX_EVENTFD){errno=B_EBADF;return -1;} EnterCriticalSection(&g_sox_cs);a->counter+=value;LeaveCriticalSection(&g_sox_cs);return 0; }
-int SV _net_timerfd_create(int clockid, int flags){ (void)clockid;(void)flags; int r=aux_alloc(AUX_TIMERFD); fprintf(stderr,"[net] timerfd_create -> %d\n",r); return r; }
+int SV _net_timerfd_create(int clockid, int flags){ (void)clockid;(void)flags; int r=aux_alloc(AUX_TIMERFD); NETLOG("[net] timerfd_create -> %d\n",r); return r; }
 int SV _net_timerfd_settime(int fd, int flags, const void *newv, void *oldv){ (void)flags;(void)oldv; struct aux_fd*a=aux_get(fd); const struct b_itimerspec*t=(const struct b_itimerspec*)newv; if(!a||a->kind!=AUX_TIMERFD||!t){errno=B_EINVAL;return -1;} uint64_t d=(uint64_t)(t->it_value.tv_sec*1000 + t->it_value.tv_nsec/1000000); a->interval_ms=(uint64_t)(t->it_interval.tv_sec*1000+t->it_interval.tv_nsec/1000000); a->due_ms=d?(now_ms()+d):0; return 0; }
 int SV _net_ppoll(void *fds, unsigned long nfds, const void *timeout, const void *sigmask){ (void)sigmask; int ms=-1; if(timeout){const struct b_timespec*t=(const struct b_timespec*)timeout;ms=(int)(t->tv_sec*1000+t->tv_nsec/1000000);} return _net_poll(fds,nfds,ms); }

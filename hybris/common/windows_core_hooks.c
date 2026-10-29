@@ -50,12 +50,15 @@ static void *windows_symbol(const char *name) {
     return result;
 }
 
+static LONG WINAPI _crash_report(EXCEPTION_POINTERS *ep);
+
 static int windows_linker_init(void) {
     char path[MAX_PATH];
     const char *directory;
     android_linker_init_fn init;
 
     if (linker_module != NULL) return linker_dlopen != NULL ? 0 : -1;
+    AddVectoredExceptionHandler(0, _crash_report);
 
     /* Use GetEnvironmentVariableA to read the real Windows process environment,
      * bypassing any POSIX shim (MSYS2/Cygwin getenv may return a POSIX path
@@ -100,6 +103,97 @@ static int windows_linker_init(void) {
      * hybris_get_hooked_symbol for any symbols not in the built-in table. */
     init(29, hybris_get_hooked_symbol, 0);
     return 0;
+}
+
+/* Names an address through the Q linker's dladdr: "lib.so+0xoff (symbol+0xoff)", or "" when it is in no guest library. */
+static void _crash_where(unsigned long long v, char *out, size_t cap)
+{
+    struct { const char *fname; void *fbase; const char *sname; void *saddr; } info;
+    out[0] = 0;
+    if (!linker_dladdr) return;
+    memset(&info, 0, sizeof info);
+    if (!linker_dladdr((const void *)(uintptr_t)v, &info) || !info.fname) return;
+    const char *b = strrchr(info.fname, '/');
+    b = b ? b + 1 : info.fname;
+    if (info.sname && info.saddr)
+        snprintf(out, cap, " <%s+0x%llx (%s+0x%llx)>", b, v - (unsigned long long)(uintptr_t)info.fbase, info.sname,
+                 v - (unsigned long long)(uintptr_t)info.saddr);
+    else
+        snprintf(out, cap, " <%s+0x%llx>", b, v - (unsigned long long)(uintptr_t)info.fbase);
+}
+
+/* Log-only crash report for faults nothing else handled (guest code has no unwind data, so the
+ * process otherwise just dies with 0xC0000005 and no clue where). Runs last in the chain and
+ * never handles the exception. Skipped for faults inside the host executable (Go's own). */
+static LONG WINAPI _crash_report(EXCEPTION_POINTERS *ep) {
+    EXCEPTION_RECORD *er = ep->ExceptionRecord;
+    const DWORD code = er->ExceptionCode;
+    const int memfault = code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION ||
+                         code == EXCEPTION_PRIV_INSTRUCTION || code == EXCEPTION_STACK_OVERFLOW;
+    /* Other process-killing codes (invalid handle, heap corruption, fast-fail, bad parameter): no module filter. */
+    const int fatal = code == 0xC0000008 || code == 0xC0000374 || code == 0xC0000409 || code == 0xC000000D ||
+                      code == 0xC0000094 || code == 0xC000001D || code == 0xC00000FD;
+    if (!memfault && !fatal) return EXCEPTION_CONTINUE_SEARCH;
+    static LONG once = 0;
+    HMODULE exe = GetModuleHandleA(NULL), at = NULL;
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCSTR)er->ExceptionAddress, &at);
+    if ((memfault && at == exe) || InterlockedIncrement(&once) > 1) return EXCEPTION_CONTINUE_SEARCH;
+    CONTEXT *c = ep->ContextRecord;
+    MEMORY_BASIC_INFORMATION mbi;
+    char mod[MAX_PATH] = "(anon)";
+    unsigned long long base = 0;
+    if (VirtualQuery(er->ExceptionAddress, &mbi, sizeof mbi)) base = (unsigned long long)(uintptr_t)mbi.AllocationBase;
+    if (at) GetModuleFileNameA(at, mod, sizeof mod);
+    fprintf(stderr, "[guest-crash] code=0x%08lx rip=%p tid=%lu in %s base=0x%llx off=0x%llx\n",
+            er->ExceptionCode, er->ExceptionAddress, GetCurrentThreadId(), mod, base,
+            (unsigned long long)(uintptr_t)er->ExceptionAddress - base);
+    { char w[512]; _crash_where((unsigned long long)(uintptr_t)er->ExceptionAddress, w, sizeof w);
+      fprintf(stderr, "[guest-crash] rip is%s\n", w[0] ? w : " in no guest library"); }
+    if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2)
+        fprintf(stderr, "[guest-crash] %s addr=%p\n", er->ExceptionInformation[0] ? "write" : "read",
+                (void *)er->ExceptionInformation[1]);
+    fprintf(stderr, "[guest-crash] rax=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx r8=%llx r9=%llx rsp=%llx\n",
+            (unsigned long long)c->Rax, (unsigned long long)c->Rcx, (unsigned long long)c->Rdx,
+            (unsigned long long)c->Rsi, (unsigned long long)c->Rdi, (unsigned long long)c->R8,
+            (unsigned long long)c->R9, (unsigned long long)c->Rsp);
+    {   /* Real unwind of the faulting thread (host frames have unwind data; guest frames end the walk). */
+        void *frames[32];
+        USHORT nf = RtlCaptureStackBackTrace(0, 32, frames, NULL);
+        for (USHORT i = 0; i < nf; i++) {
+            char m[MAX_PATH] = "(anon)", w[512]; HMODULE h = NULL; MEMORY_BASIC_INFORMATION q;
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   (LPCSTR)frames[i], &h) && h) {
+                GetModuleFileNameA(h, m, sizeof m);
+                const char *bn = strrchr(m, '\\'); if (bn) memmove(m, bn + 1, strlen(bn));
+            }
+            unsigned long long off = 0;
+            if (VirtualQuery(frames[i], &q, sizeof q)) off = (unsigned long long)((uintptr_t)frames[i] - (uintptr_t)q.AllocationBase);
+            _crash_where((unsigned long long)(uintptr_t)frames[i], w, sizeof w);
+            fprintf(stderr, "[guest-crash] bt[%u] %p %s+0x%llx%s\n", i, frames[i], m, off, w);
+        }
+    }
+    /* No unwind data: list every stack word that points into executable memory. */
+    unsigned long long *sp = (unsigned long long *)c->Rsp;
+    for (int i = 0; i < 64; i++) {
+        unsigned long long v;
+        if (!VirtualQuery(sp + i, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_NOACCESS)) break;
+        v = sp[i];
+        if (v > 0x10000 && VirtualQuery((void *)v, &mbi, sizeof mbi) && mbi.State == MEM_COMMIT &&
+            (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) {
+            char m[MAX_PATH] = "(anon)";
+            HMODULE h = NULL;
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   (LPCSTR)v, &h) && h)
+                GetModuleFileNameA(h, m, sizeof m);
+            char w[512]; _crash_where(v, w, sizeof w);
+            fprintf(stderr, "[guest-crash]   [rsp+0x%02x]=%llx %s base=0x%llx off=0x%llx%s\n", i * 8, v, m,
+                    (unsigned long long)(uintptr_t)mbi.AllocationBase,
+                    v - (unsigned long long)(uintptr_t)mbi.AllocationBase, w);
+        }
+    }
+    fflush(stderr);
+    return EXCEPTION_CONTINUE_SEARCH;
 }
 
 void hybris_set_hook_callback(hybris_hook_cb callback) {

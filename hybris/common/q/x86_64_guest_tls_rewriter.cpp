@@ -76,6 +76,11 @@ static bool decode(const Byte* p, Access* out) {
   } else {
     return false;
   }
+  // fs:[rsp+x] / fs:[rbp+x] is never a TLS access: those registers hold stack addresses, not TLS offsets. Apple's
+  // FairPlay libraries (libCoreADI, libCoreFP) plant a junk 0x64 prefix in front of ordinary frame accesses and
+  // then jump to the byte after it. Overwriting such an "access" with a 5-byte jump breaks the instruction that
+  // the obfuscated control flow lands in the middle of.
+  if (!absolute && (base_reg == 4 || base_reg == 5)) return false;
   out->length = i;
   out->reg = ((modrm >> 3) & 7) | ((rex & 4) != 0 ? 8 : 0);
   out->base_reg = base_reg;
@@ -377,6 +382,32 @@ struct StubPage {
   size_t used;
 };
 
+
+// The helper call below is ordinary compiled code and clobbers xmm0-xmm15. A patch site can be a function
+// prologue, where xmm0-xmm7 still hold the floating-point arguments (e.g. a duration<double> timeout), so the
+// stub must keep all sixteen across the call or the guest sees garbage (a NaN timeout broke every URL request).
+constexpr size_t kXmmAreaBytes = 16 * 16;
+void xmm_area_access(std::vector<Byte>* code, bool store) {
+  for (unsigned n = 0; n < 16; ++n) {
+    if (n >= 8) emit(code, 0x44);                       // REX.R for xmm8-xmm15
+    emit(code, 0x0f);
+    emit(code, store ? 0x11 : 0x10);                    // movups [rsp+disp32], xmmN  /  movups xmmN, [rsp+disp32]
+    emit(code, static_cast<Byte>(0x84 | ((n & 7) << 3)));
+    emit(code, 0x24);
+    emit32(code, static_cast<uint32_t>(n * 16));
+  }
+}
+void save_xmm_all(std::vector<Byte>* code) {
+  emit(code, 0x48); emit(code, 0x81); emit(code, 0xec);  // sub rsp, 256
+  emit32(code, static_cast<uint32_t>(kXmmAreaBytes));
+  xmm_area_access(code, true);
+}
+void restore_xmm_all(std::vector<Byte>* code) {
+  xmm_area_access(code, false);
+  emit(code, 0x48); emit(code, 0x81); emit(code, 0xc4);  // add rsp, 256
+  emit32(code, static_cast<uint32_t>(kXmmAreaBytes));
+}
+
 std::vector<StubPage> g_stub_pages;
 
 std::vector<Byte> make_stub(uintptr_t return_address, size_t module_id, const Access& access,
@@ -399,6 +430,7 @@ std::vector<Byte> make_stub(uintptr_t return_address, size_t module_id, const Ac
     emit(&code, 0x48); emit(&code, 0x83); emit(&code, 0xec); emit(&code, 8);
   }
 
+  save_xmm_all(&code);
   const uintptr_t resolver = access.base_relative || access.tp_relative || access.tpoff == 0
       ? reinterpret_cast<uintptr_t>(&linker_tls_guest_thread_pointer)
       : reinterpret_cast<uintptr_t>(&linker_tls_guest_addr);
@@ -414,6 +446,7 @@ std::vector<Byte> make_stub(uintptr_t return_address, size_t module_id, const Ac
   }
   mov_imm64(&code, 11, resolver);
   call_with_dynamic_stack_alignment(&code);
+  restore_xmm_all(&code);
 
   if (access.tp_relative && !access.base_relative) {
     emit(&code, 0x48); emit(&code, 0x8d); emit(&code, 0x80);
