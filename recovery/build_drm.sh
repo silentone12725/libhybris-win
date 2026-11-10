@@ -65,7 +65,7 @@ CORE_CFLAGS=(
   "-I$INC" "-I$COMMON" "-I$Q" "-I$BIONIC_INC" "-I$BIONIC_PRIV" "-I$STUB"
 )
 NATIVE_CFLAGS=(
-  -O2 -fPIC -DMyRelease -D_GNU_SOURCE -DDRM_LIB_BUILD -w
+  -O2 -fPIC -DMyRelease -D_GNU_SOURCE -DDRM_LIB_BUILD -w -Wno-error=incompatible-pointer-types
   "-I$LOCAL_NS" "-I$NS" "-I$INC" "-I$STUB"
 )
 
@@ -116,7 +116,7 @@ if [[ $fail -ne 0 ]]; then echo "BUILD ABORTED (compile errors above)"; exit 1; 
 
 echo "=== Linking libdrm_client.dll ==="
 g++ -shared -fPIC -o "$BUILD/libdrm_client.dll" "${OBJS[@]}" \
-    -lsupc++ -lpthread -lm -lstdc++ -lws2_32 -ladvapi32 \
+    -static-libgcc -static-libstdc++ -Wl,-Bstatic -lsupc++ -lstdc++ -lpthread -Wl,-Bdynamic -lm -lws2_32 -ladvapi32 \
     -Wl,--export-all-symbols -Wl,--out-implib,"$BUILD/libdrm_client.dll.a"
 if [[ $? -ne 0 ]]; then echo "LINK FAILED"; exit 1; fi
 ls -lh "$BUILD/libdrm_client.dll"

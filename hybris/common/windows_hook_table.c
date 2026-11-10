@@ -348,8 +348,12 @@ static int __attribute__((sysv_abi)) _bionic_rwlock_tryrdlock(void *rw){return p
 static int __attribute__((sysv_abi)) _bionic_rwlock_trywrlock(void *rw){return pthread_rwlock_trywrlock((pthread_rwlock_t*)rw);}
 static int __attribute__((sysv_abi)) _bionic_attr_init(void *a){ if(a)memset(a,0,sizeof(pthread_attr_t)); return pthread_attr_init((pthread_attr_t*)a);}
 static int __attribute__((sysv_abi)) _bionic_attr_destroy(void *a){return pthread_attr_destroy((pthread_attr_t*)a);}
-static int __attribute__((sysv_abi)) _bionic_attr_setdetachstate(void *a,int s){return pthread_attr_setdetachstate((pthread_attr_t*)a,s);}
-static int __attribute__((sysv_abi)) _bionic_attr_getdetachstate(void *a,int *s){return pthread_attr_getdetachstate((pthread_attr_t*)a,s);}
+/* bionic: JOINABLE 0, DETACHED 1; winpthreads: JOINABLE 0, DETACHED 4. */
+static int __attribute__((sysv_abi)) _bionic_attr_setdetachstate(void *a,int s){
+  if(s!=0&&s!=1) return EINVAL;
+  return pthread_attr_setdetachstate((pthread_attr_t*)a,s?PTHREAD_CREATE_DETACHED:PTHREAD_CREATE_JOINABLE);}
+static int __attribute__((sysv_abi)) _bionic_attr_getdetachstate(void *a,int *s){
+  int h=0,rc=pthread_attr_getdetachstate((pthread_attr_t*)a,&h); if(!rc&&s) *s=h==PTHREAD_CREATE_DETACHED; return rc;}
 static int __attribute__((sysv_abi)) _bionic_attr_setstacksize(void *a,size_t z){return pthread_attr_setstacksize((pthread_attr_t*)a,z);}
 static int __attribute__((sysv_abi)) _bionic_attr_getstacksize(void *a,size_t *z){return pthread_attr_getstacksize((pthread_attr_t*)a,z);}
 static int __attribute__((sysv_abi)) _bionic_attr_setschedpolicy(void *a,int p){return pthread_attr_setschedpolicy((pthread_attr_t*)a,p);}
@@ -357,14 +361,24 @@ static int __attribute__((sysv_abi)) _bionic_attr_getschedpolicy(void *a,int *p)
 static int __attribute__((sysv_abi)) _bionic_attr_setschedparam(void *a,const void *pm){return pthread_attr_setschedparam((pthread_attr_t*)a,(const struct sched_param*)pm);}
 static int __attribute__((sysv_abi)) _bionic_attr_getschedparam(void *a,void *pm){return pthread_attr_getschedparam((pthread_attr_t*)a,(struct sched_param*)pm);}
 struct _bionic_thread_tramp { void *(*fn)(void *); void *arg; };
+/* Windows commits a stack page by page through a guard page that must be touched in order;
+ * Windows compilers call __chkstk for any frame over a page. Android code does not: it opens
+ * frames of 100 KB and more and writes to the far end first, which faults in reserved,
+ * uncommitted memory with no stack left for a handler. Commit the whole stack before guest
+ * code runs on the thread; the lowest pages stay untouched as the overflow guard. */
+static void _bionic_commit_thread_stack(void){ ULONG_PTR lo=0,hi=0; GetCurrentThreadStackLimits(&lo,&hi);
+  volatile char *p=(volatile char*)((uintptr_t)__builtin_frame_address(0)&~(uintptr_t)0xfff);
+  volatile char *stop=(volatile char*)lo+4*0x1000;
+  while(p-0x1000>stop){ p-=0x1000; (void)*p; } }
 static void *_bionic_thread_entry(void *p){ struct _bionic_thread_tramp *t=(struct _bionic_thread_tramp*)p;
   void*(__attribute__((sysv_abi))*fn)(void*)=(void*(__attribute__((sysv_abi))*)(void*))t->fn; void*arg=t->arg; free(t);
   WTRACE("[thread-entry] fn=%p tid=%lu BEGIN\n",(void*)(uintptr_t)fn,(unsigned long)GetCurrentThreadId());
+  _bionic_commit_thread_stack();
    void *r=hybris_guest_thread_call((void *)(uintptr_t)fn, arg);
   WTRACE("[thread-entry] fn=%p tid=%lu END\n",(void*)(uintptr_t)fn,(unsigned long)GetCurrentThreadId()); return r; }
 static int __attribute__((sysv_abi)) _bionic_pthread_create(void *tid,const void *attr,void *(*fn)(void*),void *arg)
-{ (void)attr; WTRACE("[pthread_create] fn=%p\n",(void*)(uintptr_t)fn); _wtrace_stack("pthread_create", (void*)(uintptr_t)fn, arg); struct _bionic_thread_tramp *t=(struct _bionic_thread_tramp*)malloc(sizeof *t); if(!t) return EAGAIN;
-  t->fn=fn; t->arg=arg; int rc=pthread_create((pthread_t*)tid,NULL,_bionic_thread_entry,t); if(rc)free(t); return rc; }
+{ WTRACE("[pthread_create] fn=%p\n",(void*)(uintptr_t)fn); _wtrace_stack("pthread_create", (void*)(uintptr_t)fn, arg); struct _bionic_thread_tramp *t=(struct _bionic_thread_tramp*)malloc(sizeof *t); if(!t) return EAGAIN;
+  t->fn=fn; t->arg=arg; int rc=pthread_create((pthread_t*)tid,(const pthread_attr_t*)attr,_bionic_thread_entry,t); if(rc)free(t); return rc; }
 static void *__attribute__((sysv_abi)) _bionic_getspecific(pthread_key_t k){return pthread_getspecific(k);}
 static int __attribute__((sysv_abi)) _bionic_pthread_kill(pthread_t th,int sig){(void)th;(void)sig;return 0;}
 static int __attribute__((sysv_abi)) _bionic_pthread_sigmask(int how,const void *set,void *old){(void)how;(void)set;(void)old;return 0;}
