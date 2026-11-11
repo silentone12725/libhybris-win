@@ -727,18 +727,43 @@ bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
     // have no information and scan the whole segment; when it is true we trust
     // scan_ranges even if it is empty (a data-only library has no code).
     bool have_code_extent = false;
-    if (phdr.p_vaddr == 0 && phdr.p_memsz >= sizeof(ElfW(Ehdr))) {
-      const ElfW(Ehdr)* ehdr = reinterpret_cast<const ElfW(Ehdr)*>(begin);
-      if (ehdr->e_ident[0] == '\x7f' && ehdr->e_ident[1] == 'E' &&
-          ehdr->e_ident[2] == 'L' && ehdr->e_ident[3] == 'F') {
+    // The ELF header is at the module base: the PT_LOAD that maps vaddr 0 from
+    // file offset 0. It is NOT necessarily this executable segment. Apple's
+    // FairPlay libraries (libstoreservicescore, libCoreLSKD, ...) put the
+    // header and .rodata in a read-only first segment and start the R+E
+    // segment at a later vaddr; reading the header from this segment's own
+    // start would see code bytes, skip the section headers, and fall back to a
+    // blind sweep of the whole segment that desyncs on obfuscated code and
+    // leaves genuine fs: accesses (the stack-canary read, fs:0x28) un-rewritten.
+    // On Windows the FS base is 0 by default, so such a raw read faults at
+    // address 0x28 on any thread that never ran wrfsbase.
+    const ElfW(Ehdr)* ehdr = nullptr;
+    const char* extent_source = "no ELF header";
+    for (size_t j = 0; j < phdr_count; ++j) {
+      const ElfW(Phdr)& h = phdr_table[j];
+      if (h.p_type == PT_LOAD && h.p_vaddr == 0 && h.p_offset == 0 &&
+          h.p_memsz >= sizeof(ElfW(Ehdr))) {
+        const ElfW(Ehdr)* e = reinterpret_cast<const ElfW(Ehdr)*>(load_bias);
+        if (e->e_ident[0] == '\x7f' && e->e_ident[1] == 'E' &&
+            e->e_ident[2] == 'L' && e->e_ident[3] == 'F') ehdr = e;
+        break;
+      }
+    }
+    if (ehdr != nullptr) {
         if (find_exec_ranges(realpath, ehdr, phdr.p_vaddr, phdr.p_memsz,
                             &scan_ranges)) {
           have_code_extent = true;
+          extent_source = "section headers";
         } else {
+          extent_source = "DT_JMPREL fallback";
           // Fallback: use DT_JMPREL + DT_PLTRELSZ to skip past data sections.
-          size_t start_offset = static_cast<size_t>(ehdr->e_phoff) +
-                                static_cast<size_t>(ehdr->e_phnum) * sizeof(ElfW(Phdr));
-          start_offset = (start_offset + 0xfffUL) & ~static_cast<size_t>(0xfffUL);
+          // The headers only share this segment when it starts at vaddr 0.
+          size_t start_offset = 0;
+          if (phdr.p_vaddr == 0) {
+            start_offset = static_cast<size_t>(ehdr->e_phoff) +
+                           static_cast<size_t>(ehdr->e_phnum) * sizeof(ElfW(Phdr));
+            start_offset = (start_offset + 0xfffUL) & ~static_cast<size_t>(0xfffUL);
+          }
           for (size_t j = 0; j < phdr_count; ++j) {
             if (phdr_table[j].p_type != PT_DYNAMIC) continue;
             const ElfW(Dyn)* dyn = reinterpret_cast<const ElfW(Dyn)*>(
@@ -749,7 +774,7 @@ bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
               if (dyn[k].d_tag == DT_JMPREL)   jmprel   = dyn[k].d_un.d_ptr;
               if (dyn[k].d_tag == DT_PLTRELSZ) pltrelsz = dyn[k].d_un.d_val;
             }
-            if (jmprel != 0 && pltrelsz != 0) {
+            if (jmprel != 0 && pltrelsz != 0 && jmprel + pltrelsz > phdr.p_vaddr) {
               const size_t rela_end = static_cast<size_t>(
                   jmprel + pltrelsz - phdr.p_vaddr);
               if (rela_end > start_offset && rela_end <= phdr.p_memsz)
@@ -760,13 +785,14 @@ bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
           scan_ranges.push_back({start_offset, phdr.p_memsz});
           have_code_extent = true;
         }
-      }
     }
     // Only scan the whole segment blind when we never learned its code extent.
     // If we did (section headers or the DT_JMPREL fallback) an empty range set
     // means "no code here" and the segment is skipped.
-    if (scan_ranges.empty() && !have_code_extent)
+    const bool blind = scan_ranges.empty() && !have_code_extent;
+    if (blind)
       scan_ranges.push_back({0, phdr.p_memsz});
+    size_t patched = 0;
     // Track whether we are at a known instruction boundary. When
     // instruction_length() returns 0 (unrecognised opcode) we advance by 1
     // byte and lose sync; a 0x64 byte reached that way is a data byte inside
@@ -838,11 +864,13 @@ bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
               rewritten.wide = true;
             } else {
               if (!patch_site(begin + offset, access, module_id)) return false;
+              ++patched;
               offset += access.length;
               at_known_boundary = true;
               continue;
             }
             if (!patch_site(begin + offset, rewritten, module_id)) return false;
+            ++patched;
             offset += rewritten.length;
             at_known_boundary = true;
             continue;
@@ -853,6 +881,7 @@ bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
                   offset, begin[offset], begin[offset+1], begin[offset+2], begin[offset+3], begin[offset+4], access.length);
           return false;
         }
+        ++patched;
         offset += access.length;
         at_known_boundary = true;
       } else {
@@ -914,6 +943,37 @@ bool rewrite_x86_64_guest_tls(const ElfW(Phdr)* phdr_table, size_t phdr_count,
       }
     }
   }
+    if (std::getenv("ADAM_TLS_REWRITE_DEBUG") != nullptr) {
+      // Canonical absolute-form loads mov reg, fs:[disp32] (64 [REX] 8B /r, ModRM
+      // mod=00 rm=100, SIB=25) that are still raw after the sweep: a patched
+      // site no longer starts with 0x64, so whatever matches here was missed.
+      size_t raw_left = 0;
+      for (const auto& scan_range : scan_ranges) {
+        for (size_t off = scan_range.first; off + 9 <= scan_range.second; ++off) {
+          const Byte* q = begin + off;
+          if (q[0] != 0x64) continue;
+          size_t k = 1;
+          if ((q[k] & 0xf0) == 0x40) ++k;
+          if (q[k] != 0x8b || (q[k + 1] & 0xc7) != 0x04 || q[k + 2] != 0x25) continue;
+          int32_t disp = 0;
+          std::memcpy(&disp, q + k + 3, sizeof(disp));
+          if (disp < 0 || disp > 0x1000) continue;
+          if (raw_left < 12)
+            fprintf(stderr, "TLS-rewrite:   raw fs:[0x%x] load left at segment offset 0x%zx (vaddr 0x%zx)\n",
+                    disp, off, static_cast<size_t>(phdr.p_vaddr) + off);
+          ++raw_left;
+        }
+      }
+      if (raw_left != 0)
+        fprintf(stderr, "TLS-rewrite:   %zu canonical fs:[disp32] load(s) left raw in this segment\n", raw_left);
+      const char* name = realpath != nullptr ? std::strrchr(realpath, '/') : nullptr;
+      if (name == nullptr && realpath != nullptr) name = std::strrchr(realpath, '\\');
+      fprintf(stderr, "TLS-rewrite: %s exec segment vaddr=0x%zx: %s, %zu range(s), %zu site(s) patched\n",
+              name != nullptr ? name + 1 : (realpath != nullptr ? realpath : "?"),
+              static_cast<size_t>(phdr.p_vaddr),
+              blind ? "BLIND sweep" : extent_source,
+              scan_ranges.size(), patched);
+    }
   }
   return true;
 }
